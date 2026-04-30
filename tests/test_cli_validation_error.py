@@ -21,7 +21,7 @@ def _run_cli(
 def test_cli_help_works() -> None:
     result = _run_cli("--help")
     assert result.returncode == 0
-    assert "elvis" in result.stdout.lower()
+    assert "gtm" in result.stdout.lower()
 
 
 def _missing_modal_credentials() -> list[str]:

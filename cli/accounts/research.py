@@ -7,10 +7,10 @@ import modal
 import typer
 from pydantic import ValidationError
 
-from src.accounts.research import EnrichQuery, ResearchQuery
 from cli.json_validation import emit_json_payload_validation_telemetry
-from libs.parsers.normalization import normalize_mapping_payload
 from libs.modal_app import MODAL_APP
+from libs.parsers.normalization import normalize_mapping_payload
+from src.accounts.research import EnrichQuery, ResearchQuery
 
 
 def _print_json(value: object) -> None:

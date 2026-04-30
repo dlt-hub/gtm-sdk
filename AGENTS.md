@@ -11,10 +11,12 @@ Use these boundaries when adding or refactoring code:
 - `cli/` = thin command surface only. Parse flags, perform preflight, call `src/` workflows, and render output/errors.
 
 Anti-patterns:
+
 - Do not add workflow orchestration directly in `libs/`.
 - Do not make `cli/` command files own business logic.
 
 Migration note:
+
 - For all new work, follow this boundary. When touching legacy paths, prefer moving orchestration into `src/` incrementally.
 
 ## Package Management (uv)
@@ -22,6 +24,7 @@ Migration note:
 **Always use `uv` as the package manager. Never use bare `pip`, `pip3`, or `python3 -m pip`.**
 
 Common commands:
+
 - `uv sync` — install dependencies from `pyproject.toml` and `uv.lock`
 - `uv pip install <package>` — add a dependency (updates lock file)
 - `uv run <command>` — run a command within the uv environment
@@ -48,6 +51,7 @@ All temporary files created during tool runs (intermediate outputs, scratch data
 **Do NOT create summary or investigation documents.** Documentation should be live in the code itself.
 
 Instead of creating summary `.md` files:
+
 - **Add docstrings** to functions, classes, and modules that explain the "why" (not just the "what")
 - **Add comments** in complex sections to document decisions and gotchas
 - **Update module-level documentation** (docstrings at the top of files) when adding features

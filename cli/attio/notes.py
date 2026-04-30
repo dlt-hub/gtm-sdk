@@ -6,9 +6,9 @@ import modal
 import typer
 from pydantic import ValidationError
 
-from src.attio.notes import NoteAddQuery, NoteUpdateQuery
 from cli.json_validation import emit_json_payload_validation_telemetry
 from libs.modal_app import MODAL_APP
+from src.attio.notes import NoteAddQuery, NoteUpdateQuery
 
 app = typer.Typer(help="Manage notes in Attio.")
 

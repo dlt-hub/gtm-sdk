@@ -7,8 +7,8 @@ from pydantic import BaseModel, ConfigDict
 from libs.attio.models import NoteInput, NoteResult
 from libs.attio.notes import add_note, update_note
 from src.api_keys import inject_api_keys
-from src.attio.http_responses import error_response_from_exception
 from src.app import app, image, secrets_attio
+from src.attio.http_responses import error_response_from_exception
 
 
 @app.function(image=image, secrets=[secrets_attio])
@@ -78,7 +78,9 @@ class NoteUpdateQuery(BaseModel):
 @modal.fastapi_endpoint(method="POST", docs=True)
 def attio_note_add_http(query: NoteAddQuery) -> Any:
     try:
-        result = attio_add_note.remote(payload=query.model_dump())  # pyright: ignore[reportFunctionMemberAccess]
+        result = attio_add_note.remote(
+            payload=query.model_dump()
+        )  # pyright: ignore[reportFunctionMemberAccess]
         return result.model_dump()
     except Exception as exc:
         return error_response_from_exception(exc)
@@ -88,7 +90,9 @@ def attio_note_add_http(query: NoteAddQuery) -> Any:
 @modal.fastapi_endpoint(method="POST", docs=True)
 def attio_note_update_http(query: NoteUpdateQuery) -> Any:
     try:
-        result = attio_update_note.remote(payload=query.model_dump())  # pyright: ignore[reportFunctionMemberAccess]
+        result = attio_update_note.remote(
+            payload=query.model_dump()
+        )  # pyright: ignore[reportFunctionMemberAccess]
         return result.model_dump()
     except Exception as exc:
         return error_response_from_exception(exc)

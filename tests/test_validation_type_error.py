@@ -3,8 +3,8 @@ import secrets
 from typing import Any
 
 import pytest
-from attio.errors import ResponseValidationError
 
+from attio.errors import ResponseValidationError
 from libs.attio.sdk_boundary import build_post_record_request
 
 

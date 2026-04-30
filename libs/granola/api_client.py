@@ -35,7 +35,9 @@ class GranolaApiClient:
             },
         )
         try:
-            with urlopen(req, timeout=30) as response:  # nosec B310  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # noqa: S310
+            with urlopen(
+                req, timeout=30
+            ) as response:  # nosec B310  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # noqa: S310
                 raw = response.read().decode("utf-8")
         except HTTPError as exc:
             if exc.code == 429:

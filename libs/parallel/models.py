@@ -6,7 +6,6 @@ from pydantic import BaseModel
 
 from libs.parallel.types import FindAllGenerator, SearchMode
 
-
 # --- Input models (map to SDK call signatures) ---
 
 

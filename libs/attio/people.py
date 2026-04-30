@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
+from collections.abc import Callable
 from typing import Any, Literal
 
 from libs.attio.client import get_client

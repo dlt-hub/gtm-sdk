@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+
 from pydantic import BaseModel, ValidationError
 
 from libs.telemetry import emit_cli_event

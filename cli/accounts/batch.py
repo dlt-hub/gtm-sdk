@@ -8,10 +8,10 @@ import modal
 import typer
 from pydantic import ValidationError
 
-from src.accounts.batch import BatchAddCompaniesQuery, BatchAddPeopleQuery
 from cli.json_validation import emit_json_payload_validation_telemetry
-from libs.parsers.normalization import normalize_mapping_payload
 from libs.modal_app import MODAL_APP
+from libs.parsers.normalization import normalize_mapping_payload
+from src.accounts.batch import BatchAddCompaniesQuery, BatchAddPeopleQuery
 
 
 def _parse_records(records: str) -> list[dict[str, Any]]:

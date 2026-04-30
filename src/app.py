@@ -49,6 +49,11 @@ secrets_attio = modal.Secret.from_name("attio")
 secrets_parallel = modal.Secret.from_name("parallel")
 
 
+import src.accounts.accounts as src_gtm_accounts  # noqa: E402
+import src.accounts.batch as src_gtm_batch  # noqa: E402
+import src.accounts.people as src_gtm_people  # noqa: E402
+import src.accounts.research as src_gtm_research  # noqa: E402
+
 # Import workflow modules so their @app.function / @modal.fastapi_endpoint
 # decorators register with this app when Modal loads this file for deployment.
 # NOTE: Free tier limit is 8 web endpoints. Parallel endpoints disabled until plan upgrade.
@@ -57,10 +62,6 @@ import src.apollo.people as src_apollo_people  # noqa: E402
 import src.attio.companies as src_attio_companies  # noqa: E402
 import src.attio.notes as src_attio_notes  # noqa: E402
 import src.attio.people as src_attio_people  # noqa: E402
-import src.accounts.accounts as src_gtm_accounts  # noqa: E402
-import src.accounts.batch as src_gtm_batch  # noqa: E402
-import src.accounts.people as src_gtm_people  # noqa: E402
-import src.accounts.research as src_gtm_research  # noqa: E402
 import src.parallel.extract as src_parallel_extract  # noqa: E402
 import src.parallel.findall as src_parallel_findall  # noqa: E402
 import src.parallel.search as src_parallel_search  # noqa: E402

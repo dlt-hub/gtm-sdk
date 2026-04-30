@@ -3,6 +3,7 @@
 `granola export` writes local-first meeting exports to markdown and JSON sidecars.
 
 Architecture:
+
 - `libs/granola/*` contains reusable composable building blocks (models, parsing, normalization, state, writers, API adapter).
 - `src/granola/export.py` contains multi-step workflow orchestration.
 - `cli/granola/export.py` remains a thin command entrypoint.

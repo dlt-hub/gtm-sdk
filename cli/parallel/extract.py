@@ -6,9 +6,9 @@ import modal
 import typer
 from pydantic import ValidationError
 
-from src.parallel.extract import ExtractExcerptsQuery, ExtractFullContentQuery
 from cli.json_validation import emit_json_payload_validation_telemetry
 from libs.modal_app import MODAL_APP
+from src.parallel.extract import ExtractExcerptsQuery, ExtractFullContentQuery
 
 app = typer.Typer(help="Extract content from URLs using Parallel API.")
 

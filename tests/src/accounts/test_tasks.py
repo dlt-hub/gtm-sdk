@@ -6,8 +6,8 @@ import pytest
 def test_research_supports_search_response_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from src.accounts.tasks import research
     from libs.parallel.models import SearchResponse, SearchResultItem
+    from src.accounts.tasks import research
 
     monkeypatch.setattr(
         "libs.parallel.client.search",
@@ -25,8 +25,8 @@ def test_research_supports_search_response_model(
 def test_map_account_hierarchy_supports_search_response_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from src.accounts.tasks import map_account_hierarchy
     from libs.parallel.models import SearchResponse, SearchResultItem
+    from src.accounts.tasks import map_account_hierarchy
 
     monkeypatch.setattr(
         "libs.parallel.client.search",
@@ -50,7 +50,11 @@ def test_enrich_raises_type_error_for_unsupported_payload(
 
     monkeypatch.setattr(
         "libs.parallel.client.extract_excerpts",
-        lambda input: ["not", "a", "mapping"],  # pyright: ignore[reportUnknownLambdaType]
+        lambda input: [
+            "not",
+            "a",
+            "mapping",
+        ],  # pyright: ignore[reportUnknownLambdaType]
     )
 
     with pytest.raises(TypeError, match="Expected mapping-like payload"):
@@ -64,7 +68,9 @@ def test_model_batch_mutation_mode_is_required() -> None:
     assert result.mode == "preview"
 
     with pytest.raises(Exception):
-        BatchMutationResult(requested=1, created=0, skipped=1)  # pyright: ignore[reportCallIssue]
+        BatchMutationResult(
+            requested=1, created=0, skipped=1
+        )  # pyright: ignore[reportCallIssue]
 
 
 def test_model_batch_mutation_mode_is_restricted() -> None:
@@ -253,7 +259,9 @@ def test_batch_failure_all_success_statuses_are_stable(
 
     monkeypatch.setattr(
         "libs.attio.people.add_person",
-        lambda _payload: {"record_id": "p_1"},  # pyright: ignore[reportUnknownLambdaType]
+        lambda _payload: {
+            "record_id": "p_1"
+        },  # pyright: ignore[reportUnknownLambdaType]
     )
 
     result = batch_add_people([{"email": "ada@example.com"}], apply=True)
@@ -298,7 +306,9 @@ def test_batch_failure_all_failed_summary_is_deterministic(
 
     monkeypatch.setattr(
         "libs.attio.people.add_person",
-        lambda _payload: (_ for _ in ()).throw(RuntimeError("boom")),  # pyright: ignore[reportUnknownLambdaType]
+        lambda _payload: (_ for _ in ()).throw(
+            RuntimeError("boom")
+        ),  # pyright: ignore[reportUnknownLambdaType]
     )
 
     result = batch_add_people([{"email": "ada@example.com"}], apply=True)

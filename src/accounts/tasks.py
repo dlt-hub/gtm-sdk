@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from libs.attio import (
-    companies as attio_companies,
-    people as attio_people,
-)
+from libs.attio import companies as attio_companies
+from libs.attio import people as attio_people
 from libs.attio.models import CompanyInput, PersonInput
+from libs.parallel import client as parallel_client
+from libs.parallel.models import ExtractExcerptsInput, SearchInput, SearchResponse
+from libs.parsers.normalization import normalize_mapping_payload
 from src.accounts.models import (
     BatchMutationResult,
     EnrichResult,
@@ -15,9 +16,6 @@ from src.accounts.models import (
     MapAccountHierarchyResult,
     ResearchResult,
 )
-from libs.parsers.normalization import normalize_mapping_payload
-from libs.parallel import client as parallel_client
-from libs.parallel.models import ExtractExcerptsInput, SearchInput, SearchResponse
 
 MAX_BATCH_SIZE = 100
 

@@ -7,7 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from libs.attio.contracts import ReliabilityEnvelope
 from libs.attio.models import PersonInput
-from libs.modal_app import MODAL_APP
 from libs.attio.people import (
     add_person,
     error_envelope,
@@ -15,9 +14,10 @@ from libs.attio.people import (
     update_person,
     upsert_person,
 )
+from libs.modal_app import MODAL_APP
 from src.api_keys import inject_api_keys
-from src.attio.http_responses import error_response_from_payload
 from src.app import app, image, secrets_attio
+from src.attio.http_responses import error_response_from_payload
 
 ENABLE_ATTIO_PERSON_UPSERT_HTTP = (
     os.environ.get("ENABLE_ATTIO_PERSON_UPSERT_HTTP", "0") == "1"
@@ -230,21 +230,27 @@ def _envelope_or_error_response(payload: Any) -> Any:
 @app.function(image=image, secrets=[secrets_attio])
 @modal.fastapi_endpoint(method="POST", docs=True)
 def attio_person_add_http(query: PersonAddQuery) -> Any:
-    result = attio_add_person.remote(payload=query.model_dump())  # pyright: ignore[reportFunctionMemberAccess]
+    result = attio_add_person.remote(
+        payload=query.model_dump()
+    )  # pyright: ignore[reportFunctionMemberAccess]
     return _envelope_or_error_response(_normalize_remote_payload(result))
 
 
 @app.function(image=image, secrets=[secrets_attio])
 @modal.fastapi_endpoint(method="POST", docs=True)
 def attio_people_search_http(query: PersonSearchQuery) -> Any:
-    result = attio_search_people.remote(payload=query.model_dump())  # pyright: ignore[reportFunctionMemberAccess]
+    result = attio_search_people.remote(
+        payload=query.model_dump()
+    )  # pyright: ignore[reportFunctionMemberAccess]
     return _envelope_or_error_response(_normalize_remote_payload(result))
 
 
 @app.function(image=image, secrets=[secrets_attio])
 @modal.fastapi_endpoint(method="POST", docs=True)
 def attio_person_update_http(query: PersonUpdateQuery) -> Any:
-    result = attio_update_person.remote(payload=query.model_dump())  # pyright: ignore[reportFunctionMemberAccess]
+    result = attio_update_person.remote(
+        payload=query.model_dump()
+    )  # pyright: ignore[reportFunctionMemberAccess]
     return _envelope_or_error_response(_normalize_remote_payload(result))
 
 
@@ -253,5 +259,7 @@ if ENABLE_ATTIO_PERSON_UPSERT_HTTP:
     @app.function(image=image, secrets=[secrets_attio])
     @modal.fastapi_endpoint(method="POST", docs=True)
     def attio_person_upsert_http(query: PersonUpsertQuery) -> Any:
-        result = attio_upsert_person.remote(payload=query.model_dump())  # pyright: ignore[reportFunctionMemberAccess]
+        result = attio_upsert_person.remote(
+            payload=query.model_dump()
+        )  # pyright: ignore[reportFunctionMemberAccess]
         return _envelope_or_error_response(_normalize_remote_payload(result))

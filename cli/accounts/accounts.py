@@ -7,9 +7,9 @@ import modal
 import typer
 from pydantic import ValidationError
 
-from src.accounts.accounts import MapAccountHierarchyQuery
 from cli.json_validation import emit_json_payload_validation_telemetry
 from libs.modal_app import MODAL_APP
+from src.accounts.accounts import MapAccountHierarchyQuery
 
 
 def map_account_hierarchy_command(
