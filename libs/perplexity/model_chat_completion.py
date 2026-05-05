@@ -1,3 +1,4 @@
+# trunk-ignore-all(pyrefly/bad-index)
 from __future__ import annotations
 
 from typing import Any
@@ -15,8 +16,9 @@ class ResponseFormatSchema(BaseModel):
         cls: type[ResponseFormatSchema],
         structured_output: type[BaseModel],
     ) -> ResponseFormatSchema:
+        schema_json = structured_output.model_json_schema()
         return cls(
-            schema=structured_output.model_json_schema(),
+            schema=schema_json,
         )
 
 
@@ -29,11 +31,12 @@ class ResponseFormat(BaseModel):
         cls: type[ResponseFormat],
         structured_output: type[BaseModel],
     ) -> ResponseFormat:
-        return ResponseFormat(
+        schema_dict = ResponseFormatSchema.from_structured_output(
+            structured_output=structured_output,
+        )
+        return cls(
             type="json_schema",
-            json_schema=ResponseFormatSchema.from_structured_output(
-                structured_output=structured_output,
-            ),
+            json_schema=schema_dict,
         )
 
 

@@ -51,7 +51,7 @@ def test_attio_upsert_person_wrapper_forwards_flags(monkeypatch) -> None:
         api_keys={"attio_api_key": "ak"},
     )
 
-    assert result.success is True
+    assert hasattr(result, "success") and result.success is True
     assert captured["strict"] is True
     assert captured["location_mode"] == "raw"
     assert captured["notes"] == "hello"

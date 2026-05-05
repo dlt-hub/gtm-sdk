@@ -76,8 +76,8 @@ def add(
         {"attio_api_key": attio_api_key_override} if attio_api_key_override else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "attio_add_note")
-        result = fn.remote(payload=payload, api_keys=api_keys or None)
+        fn = modal.Function.from_name(MODAL_APP, "attio_add_note")  # pyrefly: ignore[invalid-param-spec]
+        result = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         out = result.model_dump() if hasattr(result, "model_dump") else result
         print(json.dumps(out, indent=2))
     except Exception as e:
@@ -131,8 +131,8 @@ def update(
         {"attio_api_key": attio_api_key_override} if attio_api_key_override else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "attio_update_note")
-        result = fn.remote(payload=payload, api_keys=api_keys or None)
+        fn = modal.Function.from_name(MODAL_APP, "attio_update_note")  # pyrefly: ignore[invalid-param-spec]
+        result = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         out = result.model_dump() if hasattr(result, "model_dump") else result
         print(json.dumps(out, indent=2))
     except Exception as e:

@@ -1,5 +1,7 @@
 """Webhook ETL contract for Cal.com booking ingestion."""
 
+from typing import Any
+
 from libs.caldotcom import Booking
 from src.caldotcom.utils import (
     booking_to_jsonl,
@@ -56,6 +58,6 @@ class Webhook(Booking):
         """Generate GCS filename."""
         return generate_gcs_filename(self.start, self.uid, self.title)
 
-    def etl_get_base_models(self, storage) -> list:
+    def etl_get_base_models(self, storage: Any) -> list[Any]:
         """Raise NotImplementedError (Phase 2 feature)."""
         raise NotImplementedError("LanceDB integration is Phase 2+")

@@ -81,8 +81,8 @@ def create(
         else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "parallel_findall_create")
-        run = fn.remote(payload=payload, api_keys=api_keys or None)
+        fn = modal.Function.from_name(MODAL_APP, "parallel_findall_create")  # pyrefly: ignore[invalid-param-spec]
+        run = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         out = run.model_dump() if hasattr(run, "model_dump") else run
         print(json.dumps(out, indent=2))
     except Exception as e:
@@ -129,8 +129,8 @@ def result(
         else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "parallel_findall_result")
-        res = fn.remote(payload=payload, api_keys=api_keys or None)
+        fn = modal.Function.from_name(MODAL_APP, "parallel_findall_result")  # pyrefly: ignore[invalid-param-spec]
+        res = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         out = res.model_dump() if hasattr(res, "model_dump") else res
         print(json.dumps(out, indent=2))
     except Exception as e:
@@ -177,8 +177,8 @@ def status(
         else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "parallel_findall_status")
-        run = fn.remote(payload=payload, api_keys=api_keys or None)
+        fn = modal.Function.from_name(MODAL_APP, "parallel_findall_status")  # pyrefly: ignore[invalid-param-spec]
+        run = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         out = run.model_dump() if hasattr(run, "model_dump") else run
         print(json.dumps(out, indent=2))
     except Exception as e:

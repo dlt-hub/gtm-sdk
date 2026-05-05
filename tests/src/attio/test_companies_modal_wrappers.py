@@ -45,7 +45,7 @@ def test_attio_create_companies_attribute_sets_and_clears_env_preview(
         api_keys={"attio_api_key": "ak_test"},
     )
 
-    assert result.mode == "preview"
+    assert hasattr(result, "mode") and result.mode == "preview"
     assert "ATTIO_API_KEY" not in os.environ
 
 
@@ -86,6 +86,8 @@ def test_attio_create_companies_attribute_sets_and_clears_env_apply(
         api_keys={"attio_api_key": "ak_test"},
     )
 
-    assert result.mode == "apply"
-    assert result.attribute_slug == "gtm_tool_type"
+    assert hasattr(result, "mode") and result.mode == "apply"
+    assert (
+        hasattr(result, "attribute_slug") and result.attribute_slug == "gtm_tool_type"
+    )
     assert "ATTIO_API_KEY" not in os.environ

@@ -27,9 +27,12 @@ def flatten_booking(booking_dict: dict[str, Any]) -> list[dict[str, Any]]:
     """Flatten booking data using flatsplode."""
     flattened = flatsplode.flatsplode(booking_dict)
     # flatsplode returns a generator, convert to list
-    if not isinstance(flattened, list):
-        flattened = list(flattened)
-    return flattened
+    result: list[dict[str, Any]]
+    if isinstance(flattened, list):
+        result = flattened
+    else:
+        result = list(flattened)
+    return result
 
 
 def generate_row_id(uid: str, index: int) -> str:
@@ -42,10 +45,9 @@ def booking_to_jsonl(booking_dict: dict[str, Any], uid: str) -> str:
     flattened_rows = flatten_booking(booking_dict)
     lines = []
     for i, row in enumerate(flattened_rows):
-        if isinstance(row, dict):
-            row["booking_uid"] = uid
-            row["id"] = generate_row_id(uid, i)
-            lines.append(orjson.dumps(row).decode("utf-8"))
+        row["booking_uid"] = uid
+        row["id"] = generate_row_id(uid, i)
+        lines.append(orjson.dumps(row).decode("utf-8"))
     return "\n".join(lines) + "\n"
 
 
@@ -60,9 +62,12 @@ def write_to_gcs(bucket: str, key: str, data: str | bytes) -> None:
     """Write data to GCS bucket."""
     fs = GCSFileSystem()
     gcs_path = f"gs://{bucket}/{key}"
-    binary_data: bytes = data.encode("utf-8") if isinstance(data, str) else data
+    if isinstance(data, str):
+        binary_data = data.encode("utf-8")
+    else:
+        binary_data = data
     with fs.open(gcs_path, "wb") as f:
-        f.write(binary_data)
+        f.write(binary_data)  # pyrefly: ignore[bad-argument-type]  # binary_data is bytes after narrowing
 
 
 def read_from_gcs(bucket: str, key: str) -> str:
@@ -70,5 +75,7 @@ def read_from_gcs(bucket: str, key: str) -> str:
     fs = GCSFileSystem()
     gcs_path = f"gs://{bucket}/{key}"
     with fs.open(gcs_path, "rb") as f:
-        data = f.read()
-        return data.decode("utf-8") if isinstance(data, bytes) else data
+        data = f.read()  # pyright: ignore[assignmentType]
+    if isinstance(data, bytes):
+        return data.decode("utf-8")
+    return str(data)  # pyright: ignore[return-value]

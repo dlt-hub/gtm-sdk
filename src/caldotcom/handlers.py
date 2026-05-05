@@ -96,7 +96,7 @@ def _handle_raw_request(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Failed to write to GCS: {str(e)}")
 
 
-@app.function(image=image)
+@app.function(image=image)  # pyright: ignore[reportUntypedFunctionDecorator]
 async def export_to_gcp_etl(payload: dict[str, Any]) -> dict[str, Any]:
     """
     Validate, flatten, and archive Cal.com booking webhook to GCS ETL bucket.
@@ -113,7 +113,7 @@ async def export_to_gcp_etl(payload: dict[str, Any]) -> dict[str, Any]:
     return _handle_etl_request(payload)
 
 
-@app.function(image=image)
+@app.function(image=image)  # pyright: ignore[reportUntypedFunctionDecorator]
 async def export_to_gcp_raw(payload: dict[str, Any]) -> dict[str, Any]:
     """
     Archive raw, unmodified Cal.com booking webhook payload to GCS raw bucket.

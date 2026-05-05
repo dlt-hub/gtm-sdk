@@ -33,7 +33,7 @@ def _normalize_payload(payload: Any) -> dict[str, Any]:
 
 def fetch_remote_metadata(modal_app: str) -> dict[str, Any]:
     fn = modal.Function.from_name(modal_app, "attio_people_runtime_metadata")  # pyrefly: ignore[invalid-param-spec]
-    payload = fn.remote()
+    payload = fn.remote()  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
     return _normalize_payload(payload)
 
 

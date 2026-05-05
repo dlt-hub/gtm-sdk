@@ -61,8 +61,8 @@ def add(
         {"attio_api_key": attio_api_key_override} if attio_api_key_override else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "attio_add_company")
-        result = fn.remote(payload=payload, api_keys=api_keys or None)  # pyright: ignore[reportFunctionMemberAccess]
+        fn = modal.Function.from_name(MODAL_APP, "attio_add_company")  # pyrefly: ignore[invalid-param-spec]
+        result = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         out = (
             result.model_dump(mode="json") if hasattr(result, "model_dump") else result
         )
@@ -109,11 +109,12 @@ def search(
         {"attio_api_key": attio_api_key_override} if attio_api_key_override else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "attio_search_companies")
-        results = fn.remote(payload=payload, api_keys=api_keys or None)  # pyright: ignore[reportFunctionMemberAccess]
+        fn = modal.Function.from_name(MODAL_APP, "attio_search_companies")  # pyrefly: ignore[invalid-param-spec]
+        results = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
+        # pyright: ignore[reportGeneralTypeIssues]
         out = [
             r.model_dump(mode="json") if hasattr(r, "model_dump") else r
-            for r in results
+            for r in results  # type: ignore[union-attr]
         ]
         print(json.dumps(out, indent=2))
     except Exception as e:
@@ -174,8 +175,8 @@ def update(
         {"attio_api_key": attio_api_key_override} if attio_api_key_override else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "attio_update_company")
-        result = fn.remote(payload=payload, api_keys=api_keys or None)  # pyright: ignore[reportFunctionMemberAccess]
+        fn = modal.Function.from_name(MODAL_APP, "attio_update_company")  # pyrefly: ignore[invalid-param-spec]
+        result = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         out = (
             result.model_dump(mode="json") if hasattr(result, "model_dump") else result
         )
@@ -239,7 +240,7 @@ def create_attribute_type(
     )
     try:
         fn = modal.Function.from_name(MODAL_APP, "attio_create_companies_attribute")
-        result = fn.remote(payload=payload, api_keys=api_keys or None)  # pyright: ignore[reportFunctionMemberAccess]
+        result = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess]
         out = (
             result.model_dump(mode="json") if hasattr(result, "model_dump") else result
         )

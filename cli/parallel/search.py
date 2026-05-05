@@ -59,8 +59,8 @@ def query(
         else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "parallel_search")
-        response = fn.remote(payload=payload, api_keys=api_keys or None)
+        fn = modal.Function.from_name(MODAL_APP, "parallel_search")  # pyrefly: ignore[invalid-param-spec]
+        response = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         out = response.model_dump() if hasattr(response, "model_dump") else response
         print(json.dumps(out, indent=2))
     except Exception as e:

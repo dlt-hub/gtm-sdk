@@ -45,7 +45,10 @@ def test_update_person_skips_email_addresses_when_not_merging(monkeypatch) -> No
         ) -> SimpleNamespace:
             _ = object
             vals = getattr(data, "values", data)
-            patch_values.append(dict(vals))
+            if vals is not None:
+                patch_values.append(dict(vals))
+            else:
+                patch_values.append({})
             return SimpleNamespace(
                 data=SimpleNamespace(
                     id=SimpleNamespace(record_id=record_id),
@@ -103,7 +106,10 @@ def test_update_person_merges_additional_emails(monkeypatch) -> None:
         ) -> SimpleNamespace:
             _ = object
             vals = getattr(data, "values", data)
-            patch_values.append(dict(vals))
+            if vals is not None:
+                patch_values.append(dict(vals))
+            else:
+                patch_values.append({})
             return SimpleNamespace(
                 data=SimpleNamespace(
                     id=SimpleNamespace(record_id=record_id),

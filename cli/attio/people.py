@@ -79,8 +79,8 @@ def _invoke_people_fn(
         if not effective_keys and "ATTIO_API_KEY" in env_payload:
             effective_keys = {"attio_api_key": env_payload["ATTIO_API_KEY"]}
 
-        fn = modal.Function.from_name(MODAL_APP, function_name)
-        result = fn.remote(payload=payload, api_keys=effective_keys or None)
+        fn = modal.Function.from_name(MODAL_APP, function_name)  # pyrefly: ignore[invalid-param-spec]
+        result = fn.remote(payload=payload, api_keys=effective_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         envelope = _envelope_from_remote_result(result)
         envelope.warnings = [*preflight_warnings, *envelope.warnings]
         if parity_meta:

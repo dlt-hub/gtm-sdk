@@ -11,7 +11,7 @@ def test_research_supports_search_response_model(
 
     monkeypatch.setattr(
         "libs.parallel.client.search",
-        lambda input: SearchResponse(  # pyright: ignore[reportUnknownLambdaType]
+        lambda input: SearchResponse(  # type: ignore[arg-type]  # pyright: ignore[reportUnknownLambdaType]
             search_id="s_model_1",
             results=[SearchResultItem(title="Acme", url="https://acme.com")],
         ),
@@ -30,7 +30,7 @@ def test_map_account_hierarchy_supports_search_response_model(
 
     monkeypatch.setattr(
         "libs.parallel.client.search",
-        lambda input: SearchResponse(  # pyright: ignore[reportUnknownLambdaType]
+        lambda input: SearchResponse(  # type: ignore[arg-type]  # pyright: ignore[reportUnknownLambdaType]
             search_id="s_model_2",
             results=[
                 SearchResultItem(title="Acme Parent", url="https://parent.example.com"),
@@ -50,11 +50,11 @@ def test_enrich_raises_type_error_for_unsupported_payload(
 
     monkeypatch.setattr(
         "libs.parallel.client.extract_excerpts",
-        lambda input: [
+        lambda input: [  # type: ignore[arg-type]  # pyright: ignore[reportUnknownLambdaType]
             "not",
             "a",
             "mapping",
-        ],  # pyright: ignore[reportUnknownLambdaType]
+        ],
     )
 
     with pytest.raises(TypeError, match="Expected mapping-like payload"):
@@ -80,7 +80,7 @@ def test_model_batch_mutation_mode_is_restricted() -> None:
 
     with pytest.raises(Exception):
         BatchMutationResult(
-            mode="invalid",  # pyright: ignore[reportArgumentType]
+            mode="invalid",  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
             requested=1,
             created=0,
             skipped=1,
@@ -104,7 +104,7 @@ def test_research_returns_structured_result(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(
         "libs.parallel.client.search",
-        lambda input: {  # pyright: ignore[reportUnknownLambdaType]
+        lambda input: {  # type: ignore[arg-type]
             "search_id": "s_1",
             "results": [{"title": "Acme", "url": "https://acme.com"}],
         },
@@ -121,7 +121,7 @@ def test_find_people_returns_structured_result(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(
         "libs.parallel.client.search",
-        lambda input: {  # pyright: ignore[reportUnknownLambdaType]
+        lambda input: {  # type: ignore[arg-type]
             "search_id": "s_2",
             "results": [{"name": "Ada", "email": "ada@example.com"}],
         },
@@ -137,7 +137,7 @@ def test_enrich_returns_structured_result(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(
         "libs.parallel.client.extract_excerpts",
-        lambda input: {  # pyright: ignore[reportUnknownLambdaType]
+        lambda input: {  # type: ignore[arg-type]
             "extract_id": "e_1",
             "result": {"url": input.url, "excerpts": ["founded 2021"]},
             "errors": [],
@@ -156,7 +156,7 @@ def test_map_account_hierarchy_returns_structured_result(
 
     monkeypatch.setattr(
         "libs.parallel.client.search",
-        lambda input: {  # pyright: ignore[reportUnknownLambdaType]
+        lambda input: {  # type: ignore[arg-type]
             "search_id": "s_3",
             "results": [{"company": "Acme", "parent": "Acme Holdings"}],
         },
@@ -262,9 +262,9 @@ def test_batch_failure_all_success_statuses_are_stable(
 
     monkeypatch.setattr(
         "libs.attio.people.add_person",
-        lambda _payload: {
+        lambda _payload: {  # type: ignore[arg-type]
             "record_id": "p_1",
-        },  # pyright: ignore[reportUnknownLambdaType]
+        },
     )
 
     result = batch_add_people([{"email": "ada@example.com"}], apply=True)
@@ -309,9 +309,9 @@ def test_batch_failure_all_failed_summary_is_deterministic(
 
     monkeypatch.setattr(
         "libs.attio.people.add_person",
-        lambda _payload: (_ for _ in ()).throw(
+        lambda _payload: (_ for _ in ()).throw(  # type: ignore[arg-type]
             RuntimeError("boom"),
-        ),  # pyright: ignore[reportUnknownLambdaType]
+        ),
     )
 
     result = batch_add_people([{"email": "ada@example.com"}], apply=True)

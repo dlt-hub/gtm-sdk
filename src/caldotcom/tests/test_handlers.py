@@ -6,7 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-from src.caldotcom.handlers import _handle_etl_request, _handle_raw_request
+from src.caldotcom.handlers import (
+    _handle_etl_request,  # pyright: ignore[reportPrivateUsage]
+    _handle_raw_request,  # pyright: ignore[reportPrivateUsage]
+)
 
 
 @pytest.fixture

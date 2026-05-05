@@ -79,8 +79,8 @@ def batch_add_people_command(
         {"attio_api_key": attio_api_key_override} if attio_api_key_override else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "gtm_batch_add_people")
-        response = fn.remote(payload=payload, api_keys=api_keys or None)
+        fn = modal.Function.from_name(MODAL_APP, "gtm_batch_add_people")  # pyrefly: ignore[invalid-param-spec]
+        response = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         out = normalize_mapping_payload(response)
         print(json.dumps(out))
         if _batch_exit_code(response, apply=apply) != 0:
@@ -133,8 +133,8 @@ def batch_add_companies_command(
         {"attio_api_key": attio_api_key_override} if attio_api_key_override else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "gtm_batch_add_companies")
-        response = fn.remote(payload=payload, api_keys=api_keys or None)
+        fn = modal.Function.from_name(MODAL_APP, "gtm_batch_add_companies")  # pyrefly: ignore[invalid-param-spec]
+        response = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         out = normalize_mapping_payload(response)
         print(json.dumps(out))
         if _batch_exit_code(response, apply=apply) != 0:

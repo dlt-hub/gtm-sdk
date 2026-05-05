@@ -56,8 +56,8 @@ def research_command(
         else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "gtm_research")
-        response = fn.remote(payload=payload, api_keys=api_keys or None)
+        fn = modal.Function.from_name(MODAL_APP, "gtm_research")  # pyrefly: ignore[invalid-param-spec]
+        response = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         _print_json(response)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -103,8 +103,8 @@ def enrich_command(
         else {}
     )
     try:
-        fn = modal.Function.from_name(MODAL_APP, "gtm_enrich")
-        response = fn.remote(payload=payload, api_keys=api_keys or None)
+        fn = modal.Function.from_name(MODAL_APP, "gtm_enrich")  # pyrefly: ignore[invalid-param-spec]
+        response = fn.remote(payload=payload, api_keys=api_keys or None)  # pyrefly: ignore[invalid-param-spec]  # pyright: ignore[reportFunctionMemberAccess,reportUnknownMemberType]
         _print_json(response)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
