@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # trunk-ignore-all(shellcheck/SC2310): in_array is a pure boolean check; intentional 0/1 return
+# trunk-ignore-all(shellcheck/SC2312): discovery pipelines feed `mapfile < <(...)` where pipe exit codes are intentionally ignored — empty output is handled explicitly downstream
 #
 # scripts/deploy_webhook.sh — substitute, deploy, and restore a webhook
 # handler in one safe step. Encodes every footgun catalogued in AGENTS.md
@@ -32,14 +33,21 @@ cd "${REPO_ROOT}"
 
 BACKUP_DIR="tmp/webhook-deploy-bak"
 
-VALID_HANDLERS=(export_to_attio export_to_gcp_etl)
-VALID_SOURCES=(
-  CaldotcomBookingWebhook
-  FathomCallWebhook
-  FathomMessageWebhook
-  OctolensMentionWebhook
-  Rb2bVisitWebhook
+# Discover valid handlers: any .py file in webhooks/ that uses the
+# WebhookModelToReplace placeholder pattern. New handlers (e.g. when
+# export_to_gcp_raw adopts the placeholder pattern) are picked up
+# automatically — no edit to this script required.
+mapfile -t VALID_HANDLERS < <(
+  grep -l 'WebhookModelToReplace' webhooks/*.py 2>/dev/null |
+    xargs -n1 -I{} basename {} .py
 )
+[[ ${#VALID_HANDLERS[@]} -gt 0 ]] || {
+  echo "ERROR: no webhook handlers under webhooks/ contain WebhookModelToReplace." >&2
+  exit 1
+}
+
+# VALID_SOURCES is discovered per-handler in discover_valid_sources(), below.
+VALID_SOURCES=()
 
 usage() {
   cat >&2 <<EOF
@@ -48,8 +56,9 @@ Usage:
   scripts/deploy_webhook.sh <handler> --all
 
   <handler>  : ${VALID_HANDLERS[*]}
-  <source>   : ${VALID_SOURCES[*]}
-  --all      : deploy every valid source for the chosen handler
+  <source>   : any 'Webhook as <Alias>' alias imported by <handler>.py
+               (discovered automatically from the handler's import block)
+  --all      : deploy every source imported by the chosen handler
 
 Preconditions:
   - INFISICAL_PROJECT_ID and INFISICAL_TOKEN exported in env
@@ -57,6 +66,26 @@ Preconditions:
   - working tree under webhooks/ is clean
   - required Modal secrets exist in the dlthub workspace
 EOF
+}
+
+# Parse the handler's `Webhook as <Alias>` import lines and populate
+# VALID_SOURCES. Matches the canonical import shape used by every
+# placeholder-pattern handler:
+#
+#     from src.<pkg>.webhook.<mod> import (
+#         Webhook as <SomeWebhook>,
+#     )
+#
+# Single source of truth: the imports themselves. If a handler adds or
+# drops a source, the script tracks it on the next invocation.
+discover_valid_sources() {
+  local handler_file="$1"
+  mapfile -t VALID_SOURCES < <(
+    grep -E '^[[:space:]]*Webhook as [A-Za-z_][A-Za-z0-9_]*,?[[:space:]]*$' \
+      "${handler_file}" |
+      sed -E 's/^[[:space:]]*Webhook as ([A-Za-z_][A-Za-z0-9_]*),?[[:space:]]*$/\1/'
+  )
+  [[ ${#VALID_SOURCES[@]} -gt 0 ]] || fail "No 'Webhook as <Alias>' imports found in ${handler_file}."
 }
 
 fail() {
@@ -104,17 +133,21 @@ if ! in_array "${HANDLER}" "${VALID_HANDLERS[@]}"; then
   fail "Unknown handler: ${HANDLER}"
 fi
 
+HANDLER_FILE="webhooks/${HANDLER}.py"
+[[ -f ${HANDLER_FILE} ]] || fail "Handler file not found: ${HANDLER_FILE}"
+
+discover_valid_sources "${HANDLER_FILE}"
+
 if [[ ${SOURCE_OR_ALL} == "--all" ]]; then
   SOURCES_TO_DEPLOY=("${VALID_SOURCES[@]}")
 elif in_array "${SOURCE_OR_ALL}" "${VALID_SOURCES[@]}"; then
   SOURCES_TO_DEPLOY=("${SOURCE_OR_ALL}")
 else
   usage
-  fail "Unknown source: ${SOURCE_OR_ALL}"
+  echo "ERROR: Unknown source: ${SOURCE_OR_ALL}" >&2
+  echo "  Sources imported by ${HANDLER_FILE}: ${VALID_SOURCES[*]}" >&2
+  exit 1
 fi
-
-HANDLER_FILE="webhooks/${HANDLER}.py"
-[[ -f ${HANDLER_FILE} ]] || fail "Handler file not found: ${HANDLER_FILE}"
 
 # --- preflight: env ---------------------------------------------------------
 
