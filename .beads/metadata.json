@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "gtm_sdk",
+  "project_id": "c52cb538-da18-40fd-90f7-860a1c4a0971"
+}
