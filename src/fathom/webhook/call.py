@@ -99,6 +99,10 @@ class Webhook(FathomWebhook):
         )
         # Fall back to the recorder as the sole participant for ad-hoc Fathom
         # recordings that aren't tied to a calendar invite.
+        # Fathom's calendar_invitees payload (libs/fathom/models.py:CalendarInvitee)
+        # has no RSVP field, so MeetingParticipant.status falls back to its
+        # "accepted" default for every Fathom-sourced participant — these statuses
+        # are not trustworthy.
         participants = [
             MeetingParticipant(
                 email_address=inv.email,

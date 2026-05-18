@@ -74,8 +74,10 @@ class MeetingParticipant(BaseModel):
 
     email_address: str
     is_organizer: bool
-    # Sources without a real RSVP signal (e.g. Fathom) should leave the default;
-    # Cal.com and other sources with actual status should pass it through.
+    # Sources without an RSVP signal (e.g. Fathom — its calendar_invitees payload
+    # carries no status) fall back to this default, which means participant.status
+    # on Fathom-sourced meetings is not trustworthy. Cal.com and other sources with
+    # actual RSVP state should pass it through.
     status: Literal["accepted", "tentative", "declined", "pending"] = "accepted"
 
 
