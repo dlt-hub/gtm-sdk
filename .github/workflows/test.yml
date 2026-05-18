@@ -1,0 +1,34 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    name: pytest (Dagger)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Dagger
+        uses: dagger/dagger-for-github@8.0.0
+
+      - name: Install Dagger Python SDK
+        run: pip install dagger-io anyio
+
+      - name: Run pytest in Dagger
+        run: dagger run python .github/workflows/ci/pytest_dagger.py
+
+      - name: Upload Test Results to Trunk.io
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: trunk-io/analytics-uploader@main
+        with:
+          junit-paths: junit.xml
+          org-slug: sanhedrin
+          token: ${{ secrets.TRUNK_API_TOKEN }}
