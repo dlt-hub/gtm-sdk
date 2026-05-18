@@ -1,0 +1,41 @@
+name: integration
+
+on:
+  schedule:
+    - cron: "0 12 * * *" # trunk-ignore(yamllint/quoted-strings)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  pytest-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Install Infisical CLI
+        run: |
+          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
+          sudo apt-get install -y infisical
+      - name: Run integration tests
+        env:
+          INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
+        run: |
+          infisical run \
+            --projectId "$INFISICAL_PROJECT_ID" \
+            --token "$INFISICAL_TOKEN" \
+            --env=dev \
+            -- uv run pytest -m integration --junit-xml=junit.xml -o junit_family=xunit1 || true
+      - name: Upload Test Results to Trunk.io
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: trunk-io/analytics-uploader@main
+        with:
+          junit-paths: junit.xml
+          org-slug: sanhedrin
+          token: ${{ secrets.TRUNK_API_TOKEN }}
