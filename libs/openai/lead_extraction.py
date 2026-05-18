@@ -3,7 +3,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-import polars as pl
+import narwhals as nw
+import pyarrow as pa
+import pyarrow.csv as pacsv
 from pydantic import BaseModel, Field
 
 
@@ -70,12 +72,13 @@ Be conservative - only extract information that is explicitly mentioned."""
     return lead_info
 
 
+@nw.narwhalify
 def df_add_extracted_lead_info(
-    df: pl.DataFrame,
+    df: nw.DataFrame[Any],
     description_column: str,
     openai_client: Any,
     model: str = "gpt-4o-mini",
-) -> pl.DataFrame:
+) -> nw.DataFrame[Any]:
     """Add extracted lead information columns to DataFrame.
 
     Args:
@@ -89,7 +92,7 @@ def df_add_extracted_lead_info(
         extracted_location, extracted_school
     """
 
-    def process_row(description: str | None) -> dict[str, Any]:
+    def process_row(description: str | None) -> dict[str, str | None]:
         if description is None or description.strip() == "":
             return {
                 "extracted_title": None,
@@ -122,18 +125,28 @@ def df_add_extracted_lead_info(
                 "extracted_school": None,
             }
 
-    extracted_data: list[dict[str, Any]] = [
-        process_row(desc) for desc in df[description_column].to_list()
+    descriptions: list[str | None] = df.get_column(description_column).to_list()
+    extracted_data: list[dict[str, str | None]] = [
+        process_row(desc) for desc in descriptions
     ]
 
-    extracted_df: pl.DataFrame = pl.DataFrame(extracted_data)
-
-    result_df: pl.DataFrame = pl.concat(
-        [df, extracted_df],
-        how="horizontal",
+    backend = nw.get_native_namespace(df)
+    extracted_df = nw.from_dict(
+        {
+            "extracted_title": [row["extracted_title"] for row in extracted_data],
+            "extracted_company": [row["extracted_company"] for row in extracted_data],
+            "extracted_location": [row["extracted_location"] for row in extracted_data],
+            "extracted_school": [row["extracted_school"] for row in extracted_data],
+        },
+        backend=backend,
+    ).with_columns(
+        nw.col("extracted_title").cast(nw.String),
+        nw.col("extracted_company").cast(nw.String),
+        nw.col("extracted_location").cast(nw.String),
+        nw.col("extracted_school").cast(nw.String),
     )
 
-    return result_df
+    return nw.concat([df, extracted_df], how="horizontal")
 
 
 def process_csv_with_lead_extraction(
@@ -142,7 +155,7 @@ def process_csv_with_lead_extraction(
     description_column: str,
     openai_api_key: str | None = None,
     model: str = "gpt-4o-mini",
-) -> pl.DataFrame:
+) -> nw.DataFrame[Any]:
     """Process a CSV file to extract lead information from description column.
 
     Args:
@@ -165,14 +178,16 @@ def process_csv_with_lead_extraction(
     client = getattr(openai_sdk, "OpenAI")(api_key=api_key)
 
     print(f"Reading CSV from: {input_csv_path}")
-    df: pl.DataFrame = pl.read_csv(input_csv_path)
+    # trunk-ignore(pyright/reportPrivateImportUsage): pyarrow.csv.read_csv is a public API, stubs flag it as internal
+    table: pa.Table = pacsv.read_csv(input_csv_path)
+    df: nw.DataFrame[Any] = nw.from_native(table, eager_only=True)
     print(f"Loaded {len(df)} rows")
 
     if description_column not in df.columns:
         raise ValueError(f"Column '{description_column}' not found in CSV")
 
     print(f"Extracting lead information from '{description_column}' column...")
-    result_df: pl.DataFrame = df_add_extracted_lead_info(
+    result_df: nw.DataFrame[Any] = df_add_extracted_lead_info(
         df=df,
         description_column=description_column,
         openai_client=client,
@@ -180,14 +195,16 @@ def process_csv_with_lead_extraction(
     )
 
     print(f"Writing results to: {output_csv_path}")
-    result_df.write_csv(output_csv_path)
+    # trunk-ignore(pyright/reportPrivateImportUsage): pyarrow.csv.write_csv is a public API, stubs flag it as internal
+    pacsv.write_csv(nw.to_native(result_df), output_csv_path)
     print("Processing complete")
 
     return result_df
 
 
+@nw.narwhalify
 def save_rows_as_json_files(
-    df: pl.DataFrame,
+    df: nw.DataFrame[Any],
     output_directory: str,
 ) -> int:
     """Save each row of DataFrame as a separate JSON file.
@@ -205,10 +222,9 @@ def save_rows_as_json_files(
         exist_ok=True,
     )
 
-    rows: list[dict[str, Any]] = df.to_dicts()
     files_created: int = 0
 
-    for idx, row in enumerate(rows):
+    for idx, row in enumerate(df.iter_rows(named=True)):
         name: str | None = row.get("name")
 
         if name:
@@ -219,7 +235,7 @@ def save_rows_as_json_files(
             filename: str = f"{idx:05d}_{sanitized_name}.json"
 
         else:
-            filename: str = f"{idx:05d}_unnamed.json"
+            filename = f"{idx:05d}_unnamed.json"
 
         file_path: Path = output_path / filename
 

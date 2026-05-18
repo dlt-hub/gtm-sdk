@@ -16,8 +16,10 @@ dependencies = [
   "gtm-apollo>=0.0.2",
   "ibis-framework",
   "modal",
+  "narwhals>=2.21.0",
   "orjson>=3.10.0",
   "parallel-web",
+  "pyarrow>=18.0.0",
   "pydantic>=2.0",
   "requests>=2.33.1",
   "typer>=0.15",
@@ -34,6 +36,9 @@ dependencies = [
   "uuid7>=0.1.0",
   "dagger-io>=0.20.8",
 ]
+
+[project.optional-dependencies]
+marketplace = ["polars>=1.10.0"]
 
 [tool.setuptools.packages.find]
 include = ["cli*", "libs*", "src*"]

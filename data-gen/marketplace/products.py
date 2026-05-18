@@ -2,13 +2,34 @@
 
 This module parses marketplace_products.csv and converts each row into a Pydantic BaseModel.
 Provides helper functions that can be called by other scripts.
+
+Polars is an optional dependency. Install via `uv sync --extra marketplace` to enable
+the DataFrame-backed helpers. Importing this module without that extra is supported;
+the polars-backed functions only fail at call time.
 """
 
-from pathlib import Path
-from typing import Any
+from __future__ import annotations
 
-import polars as pl
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    import polars as pl  # pyrefly: ignore[missing-import] — optional extra (uv sync --extra marketplace)
+
+
+def _import_polars() -> Any:
+    """Import polars, raising a clearer error if the marketplace extra is missing."""
+    try:
+        import polars as pl  # pyrefly: ignore[missing-import] — optional extra
+    except ModuleNotFoundError as exc:
+        raise ImportError(
+            "polars is required for marketplace DataFrame helpers. "
+            "Install it with: uv sync --extra marketplace",
+        ) from exc
+
+    return pl
 
 
 class MarketplaceProduct(BaseModel):
@@ -58,6 +79,8 @@ def df_load_products(
     Returns:
         Polars DataFrame containing all products
     """
+    pl = _import_polars()
+
     df = pl.read_csv(
         source=csv_path,
     )
@@ -67,7 +90,6 @@ def df_load_products(
 
 def test_df_load_products(tmp_path: Path) -> None:
     """Test loading products from CSV."""
-    # Create a temporary CSV file
     csv_content = """title,id,product_category_id,hid,product_category_hid
 Gone Girl: A Novel,B006LSZECO,7c665b5f-eda4-4d57-a446-cba70e87f4cb,333,1
 Choke Point,B00AFPNV0,7c665b5f-eda4-4d57-a446-cba70e87f4cb,926,1"""
@@ -182,6 +204,8 @@ def get_products_by_category(
     Returns:
         List of MarketplaceProduct instances matching the category
     """
+    pl = _import_polars()
+
     df = df_load_products(
         csv_path=csv_path,
     )

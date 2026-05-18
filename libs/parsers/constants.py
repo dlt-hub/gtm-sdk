@@ -1,4 +1,4 @@
-import polars as pl
+import pyarrow as pa
 
 NULL_VALUES: list[str] = [
     "",
@@ -22,20 +22,20 @@ DF_COLUMN_ORGANIZATION_NAME: str = "organization_name"
 DF_COLUMN_ORGANIZATION_TITLE: str = "organization_title"
 DF_COLUMN_PHOTO: str = "photo"
 
-DF_SCHEMA: dict[str, type[pl.DataType]] = {
-    DF_COLUMN_CLASS_YEAR: pl.Utf8,
-    DF_COLUMN_E_MAIL_1_VALUE: pl.Utf8,
-    DF_COLUMN_FIRST_NAME: pl.Utf8,
-    DF_COLUMN_MIDDLE_NAME: pl.Utf8,
-    DF_COLUMN_FULL_NAME: pl.Utf8,
-    DF_COLUMN_LAST_NAME: pl.Utf8,
-    DF_COLUMN_LINKEDIN: pl.Utf8,
-    DF_COLUMN_PHONE_1_VALUE: pl.Utf8,
-    DF_COLUMN_PHOTO: pl.Utf8,
-    DF_COLUMN_BIRTHDAY: pl.Utf8,
-    DF_COLUMN_SOURCE: pl.Utf8,
-    DF_COLUMN_ORGANIZATION_TITLE: pl.Utf8,
-    "file_path": pl.Utf8,
+DF_SCHEMA: dict[str, pa.DataType] = {
+    DF_COLUMN_CLASS_YEAR: pa.string(),
+    DF_COLUMN_E_MAIL_1_VALUE: pa.string(),
+    DF_COLUMN_FIRST_NAME: pa.string(),
+    DF_COLUMN_MIDDLE_NAME: pa.string(),
+    DF_COLUMN_FULL_NAME: pa.string(),
+    DF_COLUMN_LAST_NAME: pa.string(),
+    DF_COLUMN_LINKEDIN: pa.string(),
+    DF_COLUMN_PHONE_1_VALUE: pa.string(),
+    DF_COLUMN_PHOTO: pa.string(),
+    DF_COLUMN_BIRTHDAY: pa.string(),
+    DF_COLUMN_SOURCE: pa.string(),
+    DF_COLUMN_ORGANIZATION_TITLE: pa.string(),
+    "file_path": pa.string(),
 }
 
 DF_TARGET_COLUMNS: dict[str, list[str]] = {

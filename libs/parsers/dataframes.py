@@ -1,79 +1,79 @@
 import re
+from typing import Any
 
-import polars as pl
+import narwhals as nw
 
 from libs.parsers.contacts import parse_clean_name_remove_credentials
 
 
+def _clean_name_pair(
+    first: str | None,
+    last: str | None,
+) -> tuple[str | None, str | None]:
+    """Strip credentials and rebalance first/last name parts.
+
+    Mirrors the prior polars expression: if the last-name column carries
+    multiple tokens, the final token becomes the last name and the leading
+    tokens fold back into the first name. If the last-name column is empty
+    and the first-name column carries multiple tokens, the final first-name
+    token migrates to last name.
+    """
+    clean_first = parse_clean_name_remove_credentials(first) if first else None
+    clean_last = parse_clean_name_remove_credentials(last) if last else None
+
+    last_parts = clean_last.split(" ") if clean_last else []
+    first_parts = clean_first.split(" ") if clean_first else []
+
+    if len(last_parts) > 1:
+        new_last: str | None = last_parts[-1]
+        new_first: str | None = (
+            f"{clean_first or ''} {' '.join(last_parts[:-1])}".strip()
+        )
+    elif len(last_parts) == 1:
+        new_last = last_parts[-1]
+        new_first = clean_first
+    elif len(first_parts) > 1:
+        new_last = first_parts[-1]
+        new_first = " ".join(first_parts[:-1])
+    else:
+        new_last = None
+        new_first = clean_first
+
+    return new_first, new_last
+
+
+@nw.narwhalify
 def df_clean_names(
-    df: pl.DataFrame,
+    df: nw.DataFrame[Any],
     first_name_col: str,
     last_name_col: str,
-) -> pl.DataFrame:
+) -> nw.DataFrame[Any]:
     """Clean first and last names in any dataframe."""
     if {first_name_col, last_name_col} - set(df.columns):
         return df
 
-    return (
-        df.with_columns(
-            [
-                pl.col(col)
-                .map_elements(parse_clean_name_remove_credentials, return_dtype=pl.Utf8)
-                .alias(f"clean_{col}")
-                for col in [first_name_col, last_name_col]
-            ],
-        )
-        .with_columns(
-            pl.col(f"clean_{last_name_col}").str.split(" ").alias("last_parts"),
-        )
-        .with_columns(
-            pl.col(f"clean_{first_name_col}").str.split(" ").alias("first_parts"),
-        )
-        .with_columns(
-            [
-                pl.when(pl.col("last_parts").list.len() > 0)
-                .then(pl.col("last_parts").list.get(-1))
-                .when(
-                    (
-                        pl.col(f"clean_{last_name_col}").is_null()
-                        | (pl.col(f"clean_{last_name_col}") == "")
-                    )
-                    & (pl.col("first_parts").list.len() > 1),
-                )
-                .then(pl.col("first_parts").list.get(-1))
-                .otherwise(None)
-                .alias(last_name_col),
-                pl.when(pl.col("last_parts").list.len() > 1)
-                .then(
-                    pl.concat_str(
-                        [
-                            pl.col(f"clean_{first_name_col}"),
-                            pl.lit(" "),
-                            pl.col("last_parts").list.slice(0, -1).list.join(" "),
-                        ],
-                        separator="",
-                    ).str.strip_chars(),
-                )
-                .when(
-                    (
-                        pl.col(f"clean_{last_name_col}").is_null()
-                        | (pl.col(f"clean_{last_name_col}") == "")
-                    )
-                    & (pl.col("first_parts").list.len() > 1),
-                )
-                .then(pl.col("first_parts").list.slice(0, -1).list.join(" "))
-                .otherwise(pl.col(f"clean_{first_name_col}"))
-                .alias(first_name_col),
-            ],
-        )
-        .drop(
-            [
-                f"clean_{first_name_col}",
-                f"clean_{last_name_col}",
-                "last_parts",
-                "first_parts",
-            ],
-        )
+    firsts = df.get_column(first_name_col).to_list()
+    lasts = df.get_column(last_name_col).to_list()
+
+    new_firsts: list[str | None] = []
+    new_lasts: list[str | None] = []
+
+    for first_val, last_val in zip(firsts, lasts, strict=True):
+        nf, nl = _clean_name_pair(first_val, last_val)
+        new_firsts.append(nf)
+        new_lasts.append(nl)
+
+    patch = nw.from_dict(
+        {
+            first_name_col: new_firsts,
+            last_name_col: new_lasts,
+        },
+        backend=nw.get_native_namespace(df),
+    )
+
+    return df.with_columns(
+        patch.get_column(first_name_col).cast(nw.String),
+        patch.get_column(last_name_col).cast(nw.String),
     )
 
 
@@ -97,7 +97,8 @@ def parse_pomona_class_year(
             return year_match.group(0)
 
 
-def parse_clay_names(df: pl.DataFrame) -> pl.DataFrame:
+@nw.narwhalify
+def parse_clay_names(df: nw.DataFrame[Any]) -> nw.DataFrame[Any]:
     """Clean first and last names in Clay data."""
     match (
         "First Name (2)" in df.columns and "Last Name (2)" in df.columns,
@@ -113,26 +114,26 @@ def parse_clay_names(df: pl.DataFrame) -> pl.DataFrame:
             return df
 
 
-def _extract_pomona_class_year_from_row(row: dict[str, str | None]) -> str | None:
-    return parse_pomona_class_year(
-        row.get("School Name - Education"),
-        row.get("End Date - Education"),
-    )
-
-
-def parse_pomona_class_years(df: pl.DataFrame) -> pl.DataFrame:
+@nw.narwhalify
+def parse_pomona_class_years(df: nw.DataFrame[Any]) -> nw.DataFrame[Any]:
     """Extract class years for Pomona College alumni from Clay data."""
     if (
         "School Name - Education" not in df.columns
         or "End Date - Education" not in df.columns
     ):
-        return df.with_columns(pl.lit(None).alias("Class Year"))
+        return df.with_columns(nw.lit(None).cast(nw.String).alias("Class Year"))
 
-    return df.with_columns(
-        pl.struct(["School Name - Education", "End Date - Education"])
-        .map_elements(
-            _extract_pomona_class_year_from_row,
-            return_dtype=pl.Utf8,
-        )
-        .alias("Class Year"),
+    schools = df.get_column("School Name - Education").to_list()
+    end_dates = df.get_column("End Date - Education").to_list()
+
+    class_years: list[str | None] = [
+        parse_pomona_class_year(school, end_date)
+        for school, end_date in zip(schools, end_dates, strict=True)
+    ]
+
+    patch = nw.from_dict(
+        {"Class Year": class_years},
+        backend=nw.get_native_namespace(df),
     )
+
+    return df.with_columns(patch.get_column("Class Year").cast(nw.String))
