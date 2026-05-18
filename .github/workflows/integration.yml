@@ -17,24 +17,20 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - name: Install Infisical CLI
-        run: |
-          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
-          sudo apt-get install -y infisical
+      - name: Load secrets via Infisical
+        uses: Infisical/secrets-action@v1.1.17
+        with:
+          infisical_token: ${{ secrets.INFISICAL_TOKEN }}
+          project_id: ${{ secrets.INFISICAL_PROJECT_ID }}
+          environment: dev
       - name: Run integration tests
-        env:
-          INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
-          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
         run: |
-          infisical run \
-            --projectId "$INFISICAL_PROJECT_ID" \
-            --token "$INFISICAL_TOKEN" \
-            --env=dev \
-            -- uv run pytest -m integration --junit-xml=junit.xml -o junit_family=xunit1 || true
-      - name: Upload Test Results to Trunk.io
-        if: ${{ !cancelled() }}
+          uv run pytest -m integration --junit-xml=junit.xml -o junit_family=xunit1
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@main
+      - name: Upload Test Results to Trunk.io
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: trunk-io/analytics-uploader@95a0fb8b29e45b6068304261fb518644b426a803
         with:
           junit-paths: junit.xml
           org-slug: sanhedrin
