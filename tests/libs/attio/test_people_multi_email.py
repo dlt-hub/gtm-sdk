@@ -79,7 +79,7 @@ def test_update_person_skips_email_addresses_when_not_merging(monkeypatch) -> No
     assert patch_values[0]["name"]  # name patch present
 
 
-@pytest.mark.xfail(
+@pytest.mark.xfail(  # pyright: ignore[reportUntypedFunctionDecorator]
     reason="email_addresses writer disabled — re-enabled by backlog-202605172107-attio_reenable_email_addresses_writer-prompt.md",
     raises=KeyError,
     strict=True,

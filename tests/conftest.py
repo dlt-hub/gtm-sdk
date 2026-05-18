@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from attio.errors import SDKError  # noqa: E402
+from attio.errors import SDKError  # noqa: E402  # pyrefly: ignore[missing-import]
 
 from libs.attio.sdk_boundary import get_attio_sdk_client_class  # noqa: E402
 
@@ -34,7 +34,7 @@ def modal_credentials_available() -> bool:
     return bool(token_id and token_secret)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session")  # pyright: ignore[reportUntypedFunctionDecorator]
 def attio_auth_probe(attio_api_key: str) -> None:
     # Cheap auth probe so a stale/invalid ATTIO_API_KEY skips integration tests
     # rather than 401-ing through every one. Runs once per session. Only auth

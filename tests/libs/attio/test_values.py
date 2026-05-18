@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import pytest
+import pytest  # pyrefly: ignore[missing-import]
 
 from libs.attio.models import MentionInput, PersonInput
 from libs.attio.values import (
@@ -35,7 +35,7 @@ def test_build_optional_person_values_serializes_notes_and_company() -> None:
     assert "primary_location" in values
 
 
-@pytest.mark.xfail(
+@pytest.mark.xfail(  # pyright: ignore[reportUntypedFunctionDecorator]
     reason="email_addresses writer disabled — re-enabled by backlog-202605172107-attio_reenable_email_addresses_writer-prompt.md",
     raises=KeyError,
     strict=True,
