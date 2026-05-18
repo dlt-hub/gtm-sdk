@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: "en-US"
+
+reviews:
+  profile: "assertive"
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+
+  path_instructions:
+    - path: "libs/**"
+      instructions: |
+        Each libs/<service>/ wraps exactly one external SDK/API. Flag any
+        cross-lib imports (libs/<x> importing from libs/<y>) — coordination
+        belongs in src/, not in adapters. Adapters must be callable in
+        isolation with no orchestration or side effects.
+    - path: "src/**"
+      instructions: |
+        Orchestration layer. Multi-step flows, Modal @app.function /
+        @modal.fastapi_endpoint decorators live here. New endpoints must be
+        added to _ENDPOINT_MODULES in src/app.py or their decorators won't
+        register. Free tier caps the app at 8 web endpoints.
+    - path: "cli/**"
+      instructions: |
+        Thin Typer subapps: parse → preflight → call src/ → render.
+        No business logic in cli/.
+    - path: "webhooks/**"
+      instructions: |
+        Standalone Modal apps deployed individually. Files use a
+        WebhookModelToReplace placeholder — flag commits that leave a
+        substituted form in the tree.
+    - path: "**/*.py"
+      instructions: |
+        Use modern Python: PEP 585 builtin generics (list[str], dict[str, int]),
+        PEP 604 union syntax (X | None), type hints on public functions.
+        Anchor file paths on Path(__file__).resolve().parent when reading/
+        writing files beside the script.
+
+  path_filters:
+    - "!tmp/**"
+    - "!data/**"
+    - "!out/**"
+    - "!**/*.lock"
+    - "!uv.lock"
+    - "!api/specs/**"
+    - "!api/samples/**"
+
+  tools:
+    ruff:
+      enabled: true
+    github-checks:
+      enabled: true
+      timeout_ms: 90000
+
+chat:
+  auto_reply: true
