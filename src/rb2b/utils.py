@@ -54,3 +54,37 @@ def generate_gcs_filename(
     ts = clean_timestamp(timestamp)
     company = clean_string(company_name) if company_name else "unknown"
     return f"{ts}-{event_id}-{company}.jsonl"
+
+
+def split_rb2b_tags(raw: str | None) -> list[str]:
+    """Split an rb2b ``Tags`` value into a deduped list of tag strings.
+
+    rb2b ships tags as a single string field (libs/rb2b/models.py:85,
+    ``tags: str | None = Field(default=None, alias="Tags")``).
+
+    Wire format observed in api/samples/rb2b.visit.*.json (audited 2026-05-17,
+    7 fixtures): plain comma-separated, no quoting, no embedded commas. If
+    rb2b ever ships richer values (quoted segments, escapes), revisit and
+    switch to ``csv.reader([raw])`` with the excel dialect.
+
+    Behavior:
+    - ``None`` / empty / whitespace-only → ``[]``.
+    - Strips whitespace around each token.
+    - Drops empty tokens (handles ``",,,"`` and trailing commas).
+    - Dedupes case-insensitively, keeping first-seen casing
+      (mirrors libs/attio/values.py:36-51 ``normalize_email_address_list``).
+    """
+    if not raw:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in raw.split(","):
+        t = token.strip()
+        if not t:
+            continue
+        key = t.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
+    return out

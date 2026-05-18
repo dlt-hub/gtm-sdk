@@ -11,6 +11,7 @@ from libs.rb2b import Webhook as Rb2bWebhook
 from src.rb2b.utils import (
     event_to_jsonl,
     generate_gcs_filename,
+    split_rb2b_tags,
 )
 
 
@@ -161,9 +162,7 @@ class Webhook(Rb2bWebhook):
         subject_person = PersonRef(attribute="email", value=email) if email else None
         subject_company = CompanyRef(domain=domain) if domain else None
 
-        tags_list = [
-            t.strip() for t in (self.payload.tags or "").split(",") if t.strip()
-        ]
+        tags_list = split_rb2b_tags(self.payload.tags)
         seen_at = self.payload.seen_at or self.timestamp or datetime.now(timezone.utc)
 
         ops.append(
