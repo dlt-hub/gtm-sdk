@@ -28,6 +28,8 @@ api/samples/**/evt_*.json
 !.env.example
 
 # Beads / Dolt files (added by bd init)
+# .beads is a symlink to ../.beads so this repo shares the parent ai/ beads DB
+.beads
 .dolt/
 *.db
 .beads-credential-key
