@@ -124,9 +124,9 @@ def _get_storage_source_file_data(
 @modal.concurrent(
     max_inputs=1000,
 )
-def web(
+def web(  # no return annotation: see webhooks/export_to_attio.py for rationale (FastAPI + modal.fastapi_endpoint incompatibility)
     webhook: WebhookModel,
-) -> str:
+):
     if not webhook.etl_is_valid_webhook():
         return webhook.etl_get_invalid_webhook_error_msg()
 

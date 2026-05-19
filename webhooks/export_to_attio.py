@@ -71,7 +71,7 @@ def _export(webhook: WebhookModel) -> str:
 )
 @modal.fastapi_endpoint(method="POST", docs=True)
 @modal.concurrent(max_inputs=1000)
-def web(webhook: WebhookModel) -> str:
+def web(webhook: WebhookModel):  # no return annotation: avoids FastAPI auto-building a response_model that unions with starlette Response and trips its Pydantic validation (modal magic_fastapi_app doesn't let us pass response_model=None)
     return _export(webhook)
 
 
