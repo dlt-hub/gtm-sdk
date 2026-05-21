@@ -19,16 +19,19 @@ jobs:
           enable-cache: true
 
       - run: uv sync --frozen
-      - name: Load secrets via Infisical
-        uses: Infisical/secrets-action@v1.0.16
-        with:
-          infisical_token: ${{ secrets.INFISICAL_TOKEN }}
-          project_id: ${{ secrets.INFISICAL_PROJECT_ID }}
-          environment: dev
+
+      - name: Install Infisical CLI
+        run: |
+          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
+          sudo apt-get update && sudo apt-get install -y infisical
 
       - name: Run integration tests
+        env:
+          INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
         run: |
-          uv run pytest -m integration --junit-xml=junit.xml -o junit_family=xunit1
+          infisical run --projectId "$INFISICAL_PROJECT_ID" --token "$INFISICAL_TOKEN" --env=dev -- \
+            uv run pytest -m integration --junit-xml=junit.xml -o junit_family=xunit1
         continue-on-error: true
 
       - name: Upload Test Results to Trunk.io
