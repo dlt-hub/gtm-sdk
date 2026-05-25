@@ -14,7 +14,7 @@ def _new_test_email() -> str:
     return f"attio-validation-test-{secrets.token_hex(4)}@example.com"
 
 
-@pytest.mark.usefixtures("attio_auth_probe")  # pyright: ignore[reportUntypedFunctionDecorator]
+@pytest.mark.usefixtures("attio_auth_probe")
 def test_attio_integration_credentials_preflight() -> None:
     # `attio_auth_probe` (declared in tests/conftest.py and pulled in via the
     # usefixtures marker above for its side effects) skips the session when

@@ -41,7 +41,7 @@ def _skip_if_missing_modal_credentials() -> None:
         )
 
 
-@pytest.mark.integration  # pyright: ignore[reportUntypedFunctionDecorator]
+@pytest.mark.integration
 def test_cli_add_person_with_validation_error() -> None:
     _skip_if_missing_modal_credentials()
     result = _run_cli(
@@ -61,7 +61,7 @@ def test_cli_add_person_with_validation_error() -> None:
     assert "pydantic" not in error_output.lower()
 
 
-@pytest.mark.integration  # pyright: ignore[reportUntypedFunctionDecorator]
+@pytest.mark.integration
 def test_cli_add_person_with_valid_data() -> None:
     _skip_if_missing_modal_credentials()
     email = f"attio-cli-validation-{os.urandom(3).hex()}@example.com"
