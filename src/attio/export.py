@@ -28,6 +28,7 @@ from libs.attio.models import (
 )
 from libs.attio.models import (
     MeetingInput,
+    MeetingLifecycleEventInput,
     MeetingParticipantInput,
     MentionInput,
     NoteInput,
@@ -42,12 +43,17 @@ from libs.attio.notes import (
 )
 from libs.attio.people import (
     get_person_values,
+    search_people as libs_search_people,
     upsert_person as libs_upsert_person,
 )
-from libs.attio.tracking_events import find_or_create_tracking_event
+from libs.attio.tracking_events import (
+    find_or_create_meeting_lifecycle_event,
+    find_or_create_tracking_event,
+)
 from src.attio.ops import (
     AttioOp,
     CompanyRef,
+    EmitMeetingLifecycleEvent,
     MeetingRef,
     PersonRef,
     UpsertCompany,
@@ -515,6 +521,45 @@ def _handle_upsert_tracking_event(
     )
 
 
+def _resolve_person_record_id_by_email(email: str) -> str | None:
+    """Best-effort: return the Attio People record id for an email, or None.
+
+    Used by ``_handle_emit_meeting_lifecycle_event`` to populate the
+    ``contact`` field on the tracking_events row. Network failures collapse to
+    None — the audit row still writes (with ``contact = None``) so the gap
+    is visible in Attio rather than swallowed.
+    """
+    try:
+        envelope = libs_search_people(email=email, limit=1)
+    except Exception:  # noqa: BLE001 — best-effort lookup
+        logger.exception("attio search_people failed for email=%s", email)
+        return None
+    if not envelope.success:
+        return None
+    results = envelope.meta.get("results") or []
+    if not results:
+        return None
+    first = results[0]
+    return first.get("record_id") if isinstance(first, dict) else None
+
+
+def _handle_emit_meeting_lifecycle_event(
+    op: EmitMeetingLifecycleEvent,
+    table: LookupTable,  # noqa: ARG001 — lifecycle events don't depend on in-plan refs
+) -> ReliabilityEnvelope:
+    person_record_id = _resolve_person_record_id_by_email(op.attendee_email)
+    return find_or_create_meeting_lifecycle_event(
+        MeetingLifecycleEventInput(
+            external_id=op.external_id,
+            name=op.name,
+            event_type=op.event_type,
+            timestamp=op.timestamp,
+            body_json=op.body_json,
+            contact_person_record_id=person_record_id,
+        ),
+    )
+
+
 OP_HANDLERS: dict[type, Callable[[Any, LookupTable], ReliabilityEnvelope]] = {
     UpsertPerson: _handle_upsert_person,
     UpsertCompany: _handle_upsert_company,
@@ -522,6 +567,7 @@ OP_HANDLERS: dict[type, Callable[[Any, LookupTable], ReliabilityEnvelope]] = {
     UpsertNote: _handle_upsert_note,
     UpsertMention: _handle_upsert_mention,
     UpsertTrackingEvent: _handle_upsert_tracking_event,
+    EmitMeetingLifecycleEvent: _handle_emit_meeting_lifecycle_event,
 }
 
 

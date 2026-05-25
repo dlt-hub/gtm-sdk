@@ -228,3 +228,47 @@ class TrackingEventInput(BaseModel):
 
     related_person_record_id: str | None = None
     related_company_record_id: str | None = None
+
+
+# Allowed lifecycle event types. Kept narrow so a typo can't silently create a
+# new select option in Attio. Extend when a new Cal.com trigger needs to write.
+MeetingLifecycleEventType = Literal[
+    "meeting_cancelled",
+    "meeting_rescheduled",
+    "meeting_no_show",
+    "meeting_no_show_host",
+    "meeting_ended",
+]
+
+
+class MeetingLifecycleEventInput(BaseModel):
+    """Resolved-record-id form of a meeting-lifecycle tracking_events write.
+
+    Writes the narrow subset of ``tracking_events`` slugs that actually exist on
+    the live workspace schema (``name``, ``event_type``, ``external_id``,
+    ``body``, ``timestamp``, ``contact``).
+
+    The legacy ``TrackingEventInput`` writes ``captured_url`` etc. which don't
+    exist in this workspace — see plan-02 side-finding. Don't reuse that path
+    here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Idempotency key. Pattern:
+    # ``"caldotcom:<event_type>:<booking_uid>:<attendee_email>"``. Non-unique in
+    # schema (see ai-277), so the helper uses query-then-patch.
+    external_id: str
+    name: str
+    event_type: MeetingLifecycleEventType
+    timestamp: datetime
+    # JSON-stringified context (reason, cancelledBy, old/new times, etc.).
+    # Free-form because Attio has no destination for these structured fields.
+    body_json: str
+    # Optional: when the attendee isn't yet a Person in Attio, the event still
+    # writes with ``contact = None`` so the audit row exists.
+    contact_person_record_id: str | None = None
+    # Carried through for cross-reference (``ical_uid`` of the source meeting,
+    # whether or not the meeting record itself can be mutated). Stored inside
+    # ``body_json`` rather than as a separate field — Attio has no Meeting
+    # foreign-key on tracking_events.

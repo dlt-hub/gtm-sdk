@@ -1,21 +1,40 @@
-"""Pydantic models for Cal.com domain entities."""
+"""Pydantic models for Cal.com domain entities.
+
+Cal.com webhooks ship two distinct payload shapes and seven triggers:
+
+- ``BOOKING_CREATED`` uses ``start``/``end``/``hosts[]``/``icsUid``.
+- ``BOOKING_CANCELLED``/``BOOKING_RESCHEDULED``/``PING`` use ``startTime``/
+  ``endTime``/``organizer``/``iCalUID`` (different casing).
+- ``BOOKING_NO_SHOW_UPDATED`` is slim: ``bookingUid`` + ``attendees`` only.
+- ``MEETING_STARTED``/``MEETING_ENDED`` ship the booking fields flat at the top
+  level (no ``payload`` wrap).
+
+The ``Webhook`` envelope normalizes the flat shape into the wrapped shape and
+dispatches the inner payload to one of seven ``BaseModel`` variants via a
+Pydantic discriminated union keyed on ``triggerEvent``. Each variant declares
+the fields it actually has; ``extra="allow"`` keeps us forward-compatible with
+Cal.com adding fields without versioning.
+"""
+
+from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Union
 
 import orjson
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+# ---------- Sub-models reused across variants ----------
 
 
 class EventType(BaseModel):
-    """Cal.com EventType model."""
-
     id: int
     slug: str
 
 
 class BookingHost(BaseModel):
-    """Cal.com booking host participant."""
+    """Host participant on the BOOKING_CREATED shape."""
 
     id: int
     name: str
@@ -26,19 +45,56 @@ class BookingHost(BaseModel):
 
 
 class BookingAttendee(BaseModel):
-    """Cal.com booking attendee participant."""
+    """Attendee on the BOOKING_CREATED shape."""
 
     name: str
     email: str
     displayEmail: str
     timeZone: str
     absent: bool
-    language: Optional[str] = None
-    phoneNumber: Optional[str] = None
+    language: str | None = None
+    phoneNumber: str | None = None
+
+
+class Organizer(BaseModel):
+    """Organizer on the booking-mutation shape (CANCELLED/RESCHEDULED/PING/...)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    email: str
+    id: int | None = None
+    name: str | None = None
+    username: str | None = None
+    timeZone: str | None = None
+
+
+class MutationAttendee(BaseModel):
+    """Attendee on the booking-mutation and meeting shapes.
+
+    Slimmer than ``BookingAttendee``: ``absent`` is absent, but ``noShow`` may be
+    present on meeting payloads. Fields beyond email are typically nullable.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    email: str
+    name: str | None = None
+    timeZone: str | None = None
+    noShow: bool | None = None
+    phoneNumber: str | None = None
+
+
+class NoShowAttendee(BaseModel):
+    """Attendee on BOOKING_NO_SHOW_UPDATED: only email + noShow flag."""
+
+    model_config = ConfigDict(extra="allow")
+
+    email: str
+    noShow: bool = False
 
 
 class RecordingItem(BaseModel):
-    """Cal.com recording metadata."""
+    """Cal.com recording metadata (used by call_recordings flows, not webhooks)."""
 
     id: str
     roomName: str
@@ -46,53 +102,182 @@ class RecordingItem(BaseModel):
     status: str
     duration: int
     shareToken: str
-    maxParticipants: Optional[int] = None
-    downloadLink: Optional[str] = None
-    error: Optional[str] = None
+    maxParticipants: int | None = None
+    downloadLink: str | None = None
+    error: str | None = None
 
 
 class Transcript(BaseModel):
-    """Cal.com transcript reference."""
-
     urls: list[str]
 
 
-class Booking(BaseModel):
-    """Cal.com BookingOutput_2024_08_13 model."""
+# ---------- Per-trigger payload variants (discriminated by ``triggerEvent``) ----------
+#
+# Each variant carries ``triggerEvent`` as a ``Literal`` so the union below can
+# dispatch. The envelope validator injects the trigger string into the payload
+# dict before validation so the literal matches even though Cal.com keeps
+# ``triggerEvent`` at the envelope level on the wrapped shapes.
 
-    id: int
-    uid: str
-    title: str
-    description: str
-    status: Literal["cancelled", "accepted", "rejected", "pending"]
-    start: datetime
-    end: datetime
-    duration: int
-    eventType: EventType
-    location: str
-    absentHost: bool
-    createdAt: datetime
-    updatedAt: datetime
-    hosts: list[BookingHost]
-    attendees: list[BookingAttendee]
-    bookingFieldsResponses: dict[str, Any]
-    # Optional fields
-    cancellationReason: Optional[str] = None
-    cancelledByEmail: Optional[str] = None
-    reschedulingReason: Optional[str] = None
-    rescheduledByEmail: Optional[str] = None
-    rescheduledFromUid: Optional[str] = None
-    rescheduledToUid: Optional[str] = None
-    metadata: Optional[dict[str, Any]] = None
-    rating: Optional[int] = None
-    icsUid: Optional[str] = None
-    guests: Optional[list[str]] = None
+
+class BookingCreatedPayload(BaseModel):
+    """BOOKING_CREATED payload.
+
+    ``hosts`` is the canonical place to look for the meeting host email, but
+    real-world Cal.com bookings sometimes ship without it (e.g. older webhook
+    versions, team bookings configured a specific way). ``ai-4u6`` broadened
+    the extractor to fall back to ``organizer.email``, ``user.email``, and
+    ``userPrimaryEmail`` in that order. The helper ``creator_email`` below
+    walks the same chain so the gate doesn't silently drop valid payloads.
+    """
 
     model_config = ConfigDict(extra="allow")
 
-    def get_booking_id(self) -> str:
-        """Return the booking ID (uid)."""
-        return self.uid
+    triggerEvent: Literal["BOOKING_CREATED"]
+    uid: str
+    start: datetime
+    end: datetime
+    title: str | None = None
+    description: str | None = None
+    additionalNotes: str | None = None
+    # Permissive: ``_caldotcom_status_to_attio`` normalizes unknown values
+    # safely. Locking this to a Literal would reject any future Cal.com
+    # status string and silently drop otherwise-valid bookings.
+    status: str | None = None
+    hosts: list[BookingHost] = Field(default_factory=list)
+    attendees: list[BookingAttendee] = Field(default_factory=list)
+    bookingFieldsResponses: dict[str, Any] = Field(default_factory=dict)
+    icsUid: str | None = None
+    # Fallback host-email sources for variants that omit ``hosts``. Kept as
+    # optional fields so the discriminator and ``extra="allow"`` work together.
+    organizer: Organizer | None = None
+    user: dict[str, Any] | None = None
+    userPrimaryEmail: str | None = None
+
+    def creator_email(self) -> str | None:
+        """Resolve the meeting creator's email across known Cal.com variants."""
+        for host in self.hosts:
+            if host.email:
+                return host.email
+        if self.organizer and self.organizer.email:
+            return self.organizer.email
+        if isinstance(self.user, dict):
+            user_email = self.user.get("email")
+            if isinstance(user_email, str) and user_email:
+                return user_email
+        if self.userPrimaryEmail:
+            return self.userPrimaryEmail
+        return None
+
+
+class BookingCancelledPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    triggerEvent: Literal["BOOKING_CANCELLED"]
+    uid: str
+    startTime: datetime
+    endTime: datetime
+    title: str | None = None
+    additionalNotes: str | None = None
+    organizer: Organizer
+    attendees: list[MutationAttendee] = Field(default_factory=list)
+    iCalUID: str | None = None
+    cancellationReason: str | None = None
+    cancelledBy: str | None = None
+
+
+class BookingRescheduledPayload(BaseModel):
+    """Reschedule payload.
+
+    Cal.com semantics (confirmed 2026-05-25):
+        ``startTime`` = OLD pre-reschedule start time.
+        ``rescheduleStartTime`` = NEW post-reschedule start time.
+
+    Counterintuitive; document this everywhere it's relied on.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    triggerEvent: Literal["BOOKING_RESCHEDULED"]
+    uid: str
+    startTime: datetime
+    endTime: datetime
+    rescheduleUid: str | None = None
+    rescheduleStartTime: datetime | None = None
+    rescheduleEndTime: datetime | None = None
+    rescheduledBy: str | None = None
+    title: str | None = None
+    additionalNotes: str | None = None
+    organizer: Organizer
+    attendees: list[MutationAttendee] = Field(default_factory=list)
+    iCalUID: str | None = None
+    cancellationReason: str | None = None
+
+
+class BookingNoShowPayload(BaseModel):
+    """Slim payload: too thin to compute ``canonical_meeting_uid`` directly.
+
+    The webhook handler must fetch the full booking via the Cal.com API
+    (``GET /v2/bookings/{bookingUid}``) to resolve host email + start time.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    triggerEvent: Literal["BOOKING_NO_SHOW_UPDATED"]
+    bookingUid: str
+    bookingId: int | None = None
+    attendees: list[NoShowAttendee] = Field(default_factory=list)
+    message: str | None = None
+
+
+class MeetingStartedPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    triggerEvent: Literal["MEETING_STARTED"]
+    uid: str
+    startTime: datetime
+    endTime: datetime
+    userPrimaryEmail: str
+    title: str | None = None
+    attendees: list[MutationAttendee] = Field(default_factory=list)
+    iCalUID: str | None = None
+
+
+class MeetingEndedPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    triggerEvent: Literal["MEETING_ENDED"]
+    uid: str
+    startTime: datetime
+    endTime: datetime
+    userPrimaryEmail: str
+    title: str | None = None
+    attendees: list[MutationAttendee] = Field(default_factory=list)
+    iCalUID: str | None = None
+    rating: int | None = None
+    ratingFeedback: str | None = None
+    noShowHost: bool = False
+
+
+class PingPayload(BaseModel):
+    """Cal.com connectivity check. Shape varies; only ``triggerEvent`` is required."""
+
+    model_config = ConfigDict(extra="allow")
+
+    triggerEvent: Literal["PING"]
+
+
+CalcomPayload = Annotated[
+    Union[
+        BookingCreatedPayload,
+        BookingCancelledPayload,
+        BookingRescheduledPayload,
+        BookingNoShowPayload,
+        MeetingStartedPayload,
+        MeetingEndedPayload,
+        PingPayload,
+    ],
+    Field(discriminator="triggerEvent"),
+]
 
 
 class Webhook(BaseModel):
@@ -101,33 +286,38 @@ class Webhook(BaseModel):
     Cal.com delivers webhooks wrapped in ``{"body": "<json string>"}``. The
     inner payload has two shapes depending on ``triggerEvent``:
 
-    - Booking events (``BOOKING_CREATED``, ``BOOKING_RESCHEDULED``,
-      ``BOOKING_CANCELLED``, ``BOOKING_NO_SHOW_UPDATED``, ``PING``) wrap booking
-      fields under a nested ``payload`` key.
-    - Meeting events (``MEETING_STARTED``, ``MEETING_ENDED``) put booking
-      fields flat at the top level alongside ``triggerEvent``.
+    - Booking events (``BOOKING_CREATED``, ``BOOKING_CANCELLED``,
+      ``BOOKING_RESCHEDULED``, ``BOOKING_NO_SHOW_UPDATED``, ``PING``) wrap
+      booking fields under a nested ``payload`` key.
+    - Meeting events (``MEETING_STARTED``, ``MEETING_ENDED``) put booking fields
+      flat at the top level alongside ``triggerEvent``.
 
-    The validator normalizes both shapes so downstream consumers see a uniform
-    ``triggerEvent`` / ``createdAt`` / ``payload`` structure.
+    The validator normalizes both shapes and injects ``triggerEvent`` into the
+    payload dict so the discriminated union can dispatch.
     """
 
     model_config = ConfigDict(extra="allow")
 
     triggerEvent: str
     createdAt: datetime
-    payload: dict[str, Any]
+    payload: CalcomPayload
 
     @model_validator(mode="before")
     @classmethod
     def _unwrap_and_normalize(cls, data: Any) -> Any:
+        # Step 1: unwrap Hookdeck-style ``{"body": "<json>"}``.
         if isinstance(data, dict) and "body" in data and "triggerEvent" not in data:
             body = data["body"]
-            if isinstance(body, (bytes, bytearray, memoryview)):
-                data = orjson.loads(body)
-            elif isinstance(body, str):
+            if isinstance(body, (bytes, bytearray, memoryview, str)):
                 data = orjson.loads(body)
 
-        if isinstance(data, dict) and "triggerEvent" in data and "payload" not in data:
+        if not isinstance(data, dict):
+            return data
+
+        # Step 2: lift the flat meeting shape into the wrapped envelope shape.
+        # Flat shape: triggerEvent at top, no ``payload`` key.
+        # Wrapped shape: triggerEvent + createdAt + payload{}.
+        if "triggerEvent" in data and "payload" not in data:
             trigger = data.get("triggerEvent")
             created = data.get("createdAt")
             payload = {
@@ -138,5 +328,14 @@ class Webhook(BaseModel):
                 "createdAt": created,
                 "payload": payload,
             }
+
+        # Step 3: inject ``triggerEvent`` into the payload dict so the
+        # discriminator can dispatch. Wrapped Cal.com payloads don't carry it
+        # internally — discriminator lookup fails without this.
+        if (
+            isinstance(data.get("payload"), dict)
+            and "triggerEvent" not in data["payload"]
+        ):
+            data["payload"]["triggerEvent"] = data.get("triggerEvent")
 
         return data

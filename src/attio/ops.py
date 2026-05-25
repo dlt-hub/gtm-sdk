@@ -204,6 +204,41 @@ class UpsertTrackingEvent(BaseModel):
     subject_company: CompanyRef | None = None
 
 
+class EmitMeetingLifecycleEvent(BaseModel):
+    """Source-agnostic op for a Cal.com meeting-lifecycle audit row.
+
+    Writes a ``tracking_events`` row linked to the attendee's Person record (if
+    found). Used by Cal.com because Attio's Meeting API does not support PATCH
+    or DELETE — meeting state mutations (cancel / reschedule / no-show / ended)
+    have nowhere else to land. See plan-02 for the API probe + rationale.
+
+    The dispatcher resolves ``attendee_email`` to a Person record id via
+    ``libs.attio.people.search_people``. If no match, the row still writes with
+    ``contact = None`` so the audit trail exists.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    op_type: Literal["emit_meeting_lifecycle_event"] = "emit_meeting_lifecycle_event"
+    # Stable idempotency key. Convention:
+    # ``"caldotcom:<event_type>:<booking_uid>:<attendee_email>"``.
+    external_id: str
+    event_type: Literal[
+        "meeting_cancelled",
+        "meeting_rescheduled",
+        "meeting_no_show",
+        "meeting_no_show_host",
+        "meeting_ended",
+    ]
+    name: str
+    timestamp: datetime
+    body_json: str
+    attendee_email: str
+    # ``ical_uid`` of the source Attio Meeting record. Carried for cross-
+    # reference (already embedded in ``body_json``); no Attio foreign key.
+    meeting_ical_uid: str | None = None
+
+
 AttioOp = Annotated[
     Union[
         UpsertPerson,
@@ -212,6 +247,7 @@ AttioOp = Annotated[
         UpsertNote,
         UpsertMention,
         UpsertTrackingEvent,
+        EmitMeetingLifecycleEvent,
     ],
     Field(discriminator="op_type"),
 ]
