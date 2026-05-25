@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import modal
 from modal import Image
@@ -29,8 +30,22 @@ from src.rb2b.webhook.visit import (
 # fmt: on
 # trunk-ignore-end(ruff/F401,ruff/I001,pyright/reportUnusedImport)
 
+if TYPE_CHECKING:
+    # Type-check stand-in for the deploy-time placeholder. The
+    # `scripts/deploy-webhook.sh` sed pass rewrites every occurrence of
+    # `WebhookModelToReplace` to a concrete `Webhook` class before
+    # `modal deploy`. The TYPE_CHECKING block is skipped at runtime, so the
+    # rewritten image inherits from the real Pydantic Webhook subclass; for
+    # pyright/ruff in the source tree it aliases this shim, which exposes
+    # both the Pydantic surface (`model_rebuild`, `model_validate`) and the
+    # WebhookModelProtocol contract. Eliminates the F821 suppression that
+    # was structural before this Protocol landed.
+    from libs.webhook.protocol import (
+        WebhookModelTypeCheckShim as WebhookModelToReplace,
+    )
 
-class WebhookModel(WebhookModelToReplace):  # type: ignore # trunk-ignore(ruff/F821)
+
+class WebhookModel(WebhookModelToReplace):
     pass
 
 

@@ -38,7 +38,15 @@ from src.caldotcom.webhook.booking import (
 # trunk-ignore-end(ruff/F401,ruff/I001,pyright/reportUnusedImport)
 
 
-class WebhookModel(WebhookModelToReplace):  # type: ignore # trunk-ignore(ruff/F821)
+if TYPE_CHECKING:
+    # Type-check stand-in for the deploy-time placeholder; see
+    # webhooks/export_to_attio.py for the full rationale.
+    from libs.webhook.protocol import (
+        WebhookModelTypeCheckShim as WebhookModelToReplace,
+    )
+
+
+class WebhookModel(WebhookModelToReplace):
     pass
 
 
