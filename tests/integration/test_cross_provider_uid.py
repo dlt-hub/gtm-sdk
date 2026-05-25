@@ -3,10 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import orjson
+import pytest
 
 from src.attio.ops import UpsertMeeting
 from src.caldotcom.webhook.booking import Webhook as CalcomBookingWebhook
 from src.fathom.webhook.call import Webhook as FathomCallWebhook
+
+pytestmark = pytest.mark.integration
 
 CALCOM_FIXTURE = Path("api/samples/caldotcom.booking.created.redacted.json")
 FATHOM_FIXTURE = Path("api/samples/fathom.recording.redacted.json")

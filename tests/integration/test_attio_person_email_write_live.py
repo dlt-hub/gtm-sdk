@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import secrets
 
+import pytest
+
 from libs.attio.models import PersonInput
 from libs.attio.people import add_person
+
+pytestmark = pytest.mark.integration
 
 
 def test_attio_person_create_persists_email_addresses_wrapped_shape(
