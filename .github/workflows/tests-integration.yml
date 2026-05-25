@@ -10,34 +10,30 @@ permissions:
 
 jobs:
   pytest-integration:
+    name: pytest -m integration (Dagger)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v3
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          enable-cache: true
+          fetch-depth: 0
 
-      - run: uv sync --frozen
+      - name: Setup Dagger
+        uses: dagger/dagger-for-github@8.0.0
 
-      - name: Install Infisical CLI
-        run: |
-          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
-          sudo apt-get update && sudo apt-get install -y infisical
+      - name: Install Dagger Python SDK
+        run: pip install dagger-io anyio
 
-      - name: Run integration tests
+      - name: Run integration pytest in Dagger
         env:
           INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
           INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
-        run: |
-          infisical run --projectId "$INFISICAL_PROJECT_ID" --token "$INFISICAL_TOKEN" --env=dev -- \
-            uv run pytest -m integration --junit-xml=junit.xml -o junit_family=xunit1
-        continue-on-error: true
+        run: dagger run python .github/workflows/ci/pytest_integration_dagger.py
 
       - name: Upload Test Results to Trunk.io
-        if: ${{ always() }}
+        if: ${{ !cancelled() }}
         continue-on-error: true
-        uses: trunk-io/analytics-uploader@95a0fb8b29e45b6068304261fb518644b426a803
+        uses: trunk-io/analytics-uploader@main
         with:
           junit-paths: junit.xml
           org-slug: sanhedrin
