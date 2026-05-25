@@ -9,8 +9,10 @@ __pycache__/
 .DS_Store
 *.pyc
 *.egg-info/
-.agents/
-.claude/
+# No trailing slash so these match the symlinks Conductor worktrees create
+# pointing into the parent ai/ repo, not just real directories.
+.agents
+.claude
 
 # Project scratch
 tmp/
