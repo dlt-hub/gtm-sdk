@@ -162,14 +162,13 @@ class Webhook(OctolensMentionWebhook):
         return self.FILTERS.should_exclude(self)
 
     def etl_is_valid_webhook(self) -> bool:
-        if self.action not in self.VALID_ACTIONS:
-            return False
-        return self._excluded_by_filter() is None
+        # Filters intentionally do NOT apply to the ETL path: the raw export to
+        # GCS must capture every mention (including low-relevance ones) so we
+        # can re-score later without re-fetching from Octolens. Filtering is an
+        # Attio-only concern — see `attio_is_valid_webhook`.
+        return self.action in self.VALID_ACTIONS
 
     def etl_get_invalid_webhook_error_msg(self) -> str:
-        excluded_by = self._excluded_by_filter()
-        if excluded_by is not None:
-            return f"Webhook dropped by filter: {excluded_by.name}"
         return f"Invalid webhook: {self.action}"
 
     def etl_get_json(self, storage: Any = None) -> str:

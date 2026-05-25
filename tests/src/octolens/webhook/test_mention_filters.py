@@ -23,11 +23,12 @@ def _load(filename: str) -> dict[str, Any]:
     return json.loads((SAMPLES_DIR / filename).read_text())
 
 
-def test_default_filter_drops_low_relevance() -> None:
+def test_default_filter_drops_low_relevance_for_attio_only() -> None:
     webhook = Webhook.model_validate(_load(REDDIT_LOW_SAMPLE))
     assert webhook.data.relevance_score == "low"
     assert webhook.attio_is_valid_webhook() is False
-    assert webhook.etl_is_valid_webhook() is False
+    # Filters do NOT apply to the ETL path — raw export captures every mention.
+    assert webhook.etl_is_valid_webhook() is True
     assert webhook.attio_get_operations() == []
     assert "drop-low-relevance" in webhook.attio_get_invalid_webhook_error_msg()
 
