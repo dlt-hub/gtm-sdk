@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from libs.attio.objects import create_object
+from libs.attio.objects import create_object, list_object_api_slugs
 
 
 def _mock_client(existing_object_slugs: list[str]) -> MagicMock:
@@ -40,3 +40,17 @@ def test_create_object_skips_when_present() -> None:
     client.objects.post_v2_objects.assert_not_called()
     assert result.object_exists is True
     assert result.object_created is False
+
+
+def test_list_object_api_slugs_returns_all_slugs() -> None:
+    client = _mock_client(["people", "companies", "social_mention"])
+    with patch("libs.attio.objects.get_client", return_value=client):
+        slugs = list_object_api_slugs()
+    assert slugs == {"people", "companies", "social_mention"}
+
+
+def test_list_object_api_slugs_empty_workspace() -> None:
+    client = _mock_client([])
+    with patch("libs.attio.objects.get_client", return_value=client):
+        slugs = list_object_api_slugs()
+    assert slugs == set()

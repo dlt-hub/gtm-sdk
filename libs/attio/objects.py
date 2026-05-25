@@ -4,6 +4,19 @@ from libs.attio.client import get_client
 from libs.attio.models import ObjectCreateResult
 
 
+def list_object_api_slugs() -> set[str]:
+    """Return every custom-object api_slug present in the target workspace.
+
+    Cheap read-only call used both by ``create_object`` (idempotency check)
+    and by the integration suite's preflight hook in
+    ``tests/integration/conftest.py`` (loudly fail CI when a required object
+    is missing — see ai-0ou).
+    """
+    with get_client() as client:
+        response = client.objects.get_v2_objects()
+        return {getattr(obj, "api_slug", "") for obj in response.data}
+
+
 def create_object(
     *,
     api_slug: str,
