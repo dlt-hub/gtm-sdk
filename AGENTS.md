@@ -151,7 +151,8 @@ bd close <id>         # Complete work
 3. **Update issue status** - Close finished work, update in-progress items
 4. **Commit** locally with a clear message
 5. **Push policy (branch-aware):**
-   - On `agent/*` or `feature/*` branches: you MAY `git pull --rebase && git push` without asking — these are scratch branches owned by the current task.
+   - **Roborev gate (applies to ALL branches):** Never `git push` to origin without running `git roborev review --wait` against HEAD first and confirming a clean review. If roborev is unavailable or fails to run, say so and ask before pushing.
+   - On `agent/*` or `feature/*` branches: after the roborev gate passes, you MAY `git pull --rebase && git push` without asking — these are scratch branches owned by the current task.
    - On `main`, `master`, or any release/protected branch: **DO NOT push without explicit user confirmation.** Stop after the commit, say what would be pushed, and ask. The user pushing themselves is the default.
    - If unsure which category the branch falls into, treat it as protected and ask.
 6. **Clean up** - Clear stashes, prune remote branches (only after push is authorized)
