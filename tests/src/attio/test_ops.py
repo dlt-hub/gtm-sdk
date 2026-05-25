@@ -133,7 +133,6 @@ def _valid_tracking_event_kwargs() -> dict[str, Any]:
         name="https://example.test/pricing",
         event_type="rb2b_visit",
         event_timestamp=datetime(2026, 5, 14, tzinfo=timezone.utc),
-        captured_url="https://example.test/pricing",
         body_json='{"raw": "payload"}',
     )
 
@@ -143,25 +142,22 @@ def test_upsert_tracking_event_minimal_valid() -> None:
 
     op = UpsertTrackingEvent(**_valid_tracking_event_kwargs())
     assert op.op_type == "upsert_tracking_event"
-    assert op.tags == []
-    assert op.subject_person is None and op.subject_company is None
+    assert op.event_subtype is None
+    assert op.subject_person is None
 
 
-def test_upsert_tracking_event_with_refs() -> None:
+def test_upsert_tracking_event_with_person_ref_and_subtype() -> None:
     from src.attio.ops import UpsertTrackingEvent
 
     op = UpsertTrackingEvent(
         **_valid_tracking_event_kwargs(),
+        event_subtype="repeat_visit",
         subject_person=PersonRef(attribute="email", value="alice@example.test"),
-        subject_company=CompanyRef(domain="example.test"),
-        tags=["pricing", "enterprise"],
     )
     assert op.subject_person is not None
-    assert op.subject_company is not None
     assert op.subject_person.attribute == "email"
     assert op.subject_person.value == "alice@example.test"
-    assert op.subject_company.domain == "example.test"
-    assert op.tags == ["pricing", "enterprise"]
+    assert op.event_subtype == "repeat_visit"
 
 
 def test_upsert_tracking_event_forbids_extra_fields() -> None:
@@ -169,6 +165,22 @@ def test_upsert_tracking_event_forbids_extra_fields() -> None:
 
     with pytest.raises(ValidationError):
         UpsertTrackingEvent(**_valid_tracking_event_kwargs(), bogus="x")  # pyright: ignore[reportCallIssue]  # pyrefly: ignore[unexpected-keyword]
+
+
+def test_upsert_tracking_event_forbids_subject_company() -> None:
+    """Live tracking_events schema has no company ref attribute.
+
+    Carrying a CompanyRef through the op would have nowhere to land in
+    Attio — explicitly rejected at the op boundary so the schema mismatch
+    surfaces immediately rather than at the writer.
+    """
+    from src.attio.ops import UpsertTrackingEvent
+
+    with pytest.raises(ValidationError):
+        UpsertTrackingEvent(
+            **_valid_tracking_event_kwargs(),
+            subject_company=CompanyRef(domain="example.test"),  # pyright: ignore[reportCallIssue]  # pyrefly: ignore[unexpected-keyword]
+        )
 
 
 def test_attio_op_union_discriminates_tracking_event() -> None:

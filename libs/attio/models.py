@@ -206,8 +206,20 @@ class MentionInput(BaseModel):
 class TrackingEventInput(BaseModel):
     """Resolved-record-id form of a tracking_events upsert.
 
-    The dispatcher converts UpsertTrackingEvent (which carries refs) into
-    this model, replacing refs with resolved Attio record IDs.
+    Mirrors the live workspace schema 1:1 — writable surface is
+    ``{external_id, name, event_type, event_subtype, body, contact,
+    timestamp, owner}``. Any source-specific detail (rb2b's captured_url,
+    referrer, tags, city/state/zipcode, is_repeat_visit; form fields; etc.)
+    is JSON-stringified into ``body_json``; the raw payload also lands in
+    GCS via the ETL/raw export paths for warehouse-side filtering.
+
+    The ``contact`` slug on the live object is People-only — there is no
+    company record-reference attribute — so anonymous events land with
+    ``contact=None`` and are findable only by ``external_id``. See ai-5x9
+    for the planned filter that drops Attio writes when no Person resolves.
+
+    History: ai-wq6 fixed the prior shape that wrote ``captured_url`` and
+    six other non-existent slugs.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -215,19 +227,11 @@ class TrackingEventInput(BaseModel):
     external_id: str
     name: str
     event_type: str
+    event_subtype: str | None = None
     event_timestamp: datetime
     body_json: str
 
-    captured_url: str
-    referrer: str | None = None
-    is_repeat_visit: bool | None = None
-    tags: list[str] = Field(default_factory=list)
-    city: str | None = None
-    state: str | None = None
-    zipcode: str | None = None
-
     related_person_record_id: str | None = None
-    related_company_record_id: str | None = None
 
 
 # Allowed lifecycle event types. Kept narrow so a typo can't silently create a

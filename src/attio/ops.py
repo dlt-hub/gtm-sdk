@@ -175,11 +175,26 @@ class UpsertMention(BaseModel):
 
 
 class UpsertTrackingEvent(BaseModel):
-    """Source-agnostic op for creating/updating a `tracking_events` row.
+    """Source-agnostic op for creating/updating a ``tracking_events`` row.
 
-    The dispatcher resolves `subject_person` and `subject_company` via the
-    plan's LookupTable; the libs/attio adapter is called with already-resolved
-    record IDs.
+    Fields map 1:1 to the live workspace's writable surface. Source-specific
+    detail (rb2b's captured_url/referrer/tags/etc., form fields, etc.)
+    belongs in ``body_json`` — the schema's ``body`` slug is explicitly
+    designed as the per-source escape hatch. See ai-wq6 for the prior shape
+    that carried dead fields downstream into a writer that 4xx'd against
+    the live workspace.
+
+    ``event_type`` and ``event_subtype`` are open-ended selects whose
+    option vocabulary self-registers JIT inside the libs/attio writer —
+    pass any source-meaningful string. Current callers: rb2b emits
+    ``rb2b_visit`` + ``first_visit``/``repeat_visit``; forms emit
+    ``form_submission`` + the form id (``signup-dlthub``, ...).
+
+    The dispatcher resolves ``subject_person`` via the plan's LookupTable;
+    the adapter is called with the already-resolved Person record id.
+    ``subject_company`` is intentionally absent — the live
+    ``tracking_events`` schema has no company record-reference attribute,
+    so a Company ref would have nowhere to land.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -188,20 +203,12 @@ class UpsertTrackingEvent(BaseModel):
 
     external_id: str
     name: str
-    event_type: Literal["rb2b_visit"]
+    event_type: str
+    event_subtype: str | None = None
     event_timestamp: datetime
     body_json: str
 
-    captured_url: str
-    referrer: str | None = None
-    is_repeat_visit: bool | None = None
-    tags: list[str] = Field(default_factory=list)
-    city: str | None = None
-    state: str | None = None
-    zipcode: str | None = None
-
     subject_person: PersonRef | None = None
-    subject_company: CompanyRef | None = None
 
 
 class EmitMeetingLifecycleEvent(BaseModel):

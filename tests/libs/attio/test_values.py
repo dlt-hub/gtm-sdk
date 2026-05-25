@@ -204,24 +204,30 @@ def test_build_tracking_event_values_minimum() -> None:
         event_type="rb2b_visit",
         event_timestamp=datetime(2026, 5, 14, 9, 0),
         body_json='{"x":1}',
-        captured_url="https://example.test/p",
     )
     vs = build_tracking_event_values(i)
-    # Required slugs always present
+    # Required slugs always present, matching the live schema's writable surface
+    assert vs["external_id"] == [{"value": "rb2b:abc"}]
     assert vs["name"] == [{"value": "https://example.test/p"}]
     assert vs["event_type"] == [{"option": "rb2b_visit"}]
-    assert vs["external_id"] == [{"value": "rb2b:abc"}]
-    assert vs["captured_url"] == [{"value": "https://example.test/p"}]
+    assert vs["timestamp"] == [{"value": "2026-05-14"}]  # date, not datetime
     assert vs["body"] == [{"value": '{"x":1}'}]
     # Optional slugs omitted when None
+    assert "event_subtype" not in vs
+    assert "contact" not in vs
+    # Dead slugs that don't exist on the live schema must never be emitted
+    assert "captured_url" not in vs
     assert "referrer" not in vs
     assert "city" not in vs
-    assert "tags" not in vs  # empty list omitted
+    assert "state" not in vs
+    assert "zipcode" not in vs
+    assert "tags" not in vs
+    assert "is_repeat_visit" not in vs
     assert "people" not in vs
     assert "company" not in vs
 
 
-def test_build_tracking_event_values_full() -> None:
+def test_build_tracking_event_values_with_subtype_and_contact() -> None:
     from libs.attio.models import TrackingEventInput
     from libs.attio.values import build_tracking_event_values
 
@@ -229,28 +235,29 @@ def test_build_tracking_event_values_full() -> None:
         external_id="rb2b:abc",
         name="https://example.test/p",
         event_type="rb2b_visit",
+        event_subtype="repeat_visit",
         event_timestamp=datetime(2026, 5, 14, 9, 0),
         body_json='{"x":1}',
-        captured_url="https://example.test/p",
-        referrer="https://google.test/",
-        is_repeat_visit=True,
-        tags=["pricing", "enterprise"],
-        city="Brooklyn",
-        state="NY",
-        zipcode="11201",
         related_person_record_id="pe_1",
-        related_company_record_id="co_1",
     )
     vs = build_tracking_event_values(i)
-    assert vs["referrer"] == [{"value": "https://google.test/"}]
-    assert vs["is_repeat_visit"] == [{"value": True}]
-    assert vs["tags"] == [{"option": "pricing"}, {"option": "enterprise"}]
-    assert vs["city"] == [{"value": "Brooklyn"}]
-    assert vs["state"] == [{"value": "NY"}]
-    assert vs["zipcode"] == [{"value": "11201"}]
-    assert vs["people"] == [
+    assert vs["event_subtype"] == [{"option": "repeat_visit"}]
+    assert vs["contact"] == [
         {"target_object": "people", "target_record_id": "pe_1"},
     ]
-    assert vs["company"] == [
-        {"target_object": "companies", "target_record_id": "co_1"},
-    ]
+
+
+def test_build_tracking_event_values_truncates_timestamp_to_day() -> None:
+    """Live schema's ``timestamp`` attribute is a date, not a datetime."""
+    from libs.attio.models import TrackingEventInput
+    from libs.attio.values import build_tracking_event_values
+
+    i = TrackingEventInput(
+        external_id="rb2b:abc",
+        name="x",
+        event_type="rb2b_visit",
+        event_timestamp=datetime(2026, 5, 14, 23, 59, 59),
+        body_json="{}",
+    )
+    vs = build_tracking_event_values(i)
+    assert vs["timestamp"] == [{"value": "2026-05-14"}]

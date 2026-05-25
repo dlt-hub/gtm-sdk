@@ -453,7 +453,6 @@ def _handle_upsert_tracking_event(
     table: LookupTable,
 ) -> ReliabilityEnvelope:
     person_id: str | None = None
-    company_id: str | None = None
     if op.subject_person is not None:
         person_id = table.resolve(op.subject_person)
         if person_id is None:
@@ -477,46 +476,16 @@ def _handle_upsert_tracking_event(
                 skipped_fields=[],
                 meta={"output_schema_version": "v1"},
             )
-    if op.subject_company is not None:
-        company_id = table.resolve(op.subject_company)
-        if company_id is None:
-            return ReliabilityEnvelope(
-                success=False,
-                partial_success=False,
-                action="failed",
-                record_id=None,
-                errors=[
-                    ErrorEntry(
-                        code="unresolved_ref",
-                        message=(
-                            f"could not resolve {op.subject_company.ref_kind}:"
-                            f"{op.subject_company.model_dump()}"
-                        ),
-                        error_type="UnresolvedRefError",
-                        fatal=True,
-                    ),
-                ],
-                warnings=[],
-                skipped_fields=[],
-                meta={"output_schema_version": "v1"},
-            )
 
     return find_or_create_tracking_event(
         TrackingEventInput(
             external_id=op.external_id,
             name=op.name,
             event_type=op.event_type,
+            event_subtype=op.event_subtype,
             event_timestamp=op.event_timestamp,
             body_json=op.body_json,
-            captured_url=op.captured_url,
-            referrer=op.referrer,
-            is_repeat_visit=op.is_repeat_visit,
-            tags=op.tags,
-            city=op.city,
-            state=op.state,
-            zipcode=op.zipcode,
             related_person_record_id=person_id,
-            related_company_record_id=company_id,
         ),
     )
 

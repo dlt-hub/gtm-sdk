@@ -55,10 +55,12 @@ def test_attio_get_operations_anonymous_visit_is_rejected() -> None:
 def test_attio_get_operations_company_only_emits_company_but_skips_tracking_event() -> (
     None
 ):
-    # Company-only visit still enriches the Company record in Attio, but the
-    # tracking_events row is suppressed because that schema is Person-only
-    # (no Company ref) — a contact-less row would be invisible on any
-    # timeline. The audit trail still lives in GCS raw + ETL.
+    """Company-only visit still enriches the Company record in Attio, but
+    the tracking_events row is suppressed by NoResolvablePersonFilter —
+    that schema is Person-only (no Company ref) so a contact-less row
+    would be invisible on any timeline. The audit trail still lives in
+    GCS raw + ETL. See ai-5x9.
+    """
     w = _load("rb2b.visit.company_only.redacted.json")
     assert w.attio_is_valid_webhook() is True
     ops = w.attio_get_operations()
@@ -71,7 +73,6 @@ def test_attio_get_operations_person_only_emits_two_ops() -> None:
     assert [type(o).__name__ for o in ops] == ["UpsertPerson", "UpsertTrackingEvent"]
     te = ops[1]
     assert te.subject_person is not None
-    assert te.subject_company is None
 
 
 def test_attio_get_operations_person_and_company_emits_three_ops_in_order() -> None:
@@ -91,30 +92,45 @@ def test_attio_get_operations_person_and_company_emits_three_ops_in_order() -> N
     te = ops[2]
     assert te.external_id.startswith("rb2b:")
     assert te.event_type == "rb2b_visit"
-    assert te.captured_url == w.payload.captured_url
+    assert te.event_subtype in {"first_visit", "repeat_visit"}
     assert te.name == w.payload.captured_url
 
 
-def test_attio_get_operations_tracking_event_carries_full_mapping() -> None:
+def test_attio_get_operations_tracking_event_preserves_payload_in_body_json() -> None:
+    """rb2b-specific fields (captured_url, referrer, tags, city/state/zipcode,
+    is_repeat_visit) are not part of the live tracking_events schema; they
+    survive via body_json instead. See ai-wq6.
+    """
     w = _load("rb2b.visit.person_and_company.redacted.json")
     te = w.attio_get_operations()[-1]
-    # Dedicated columns
-    assert te.referrer == w.payload.referrer
-    assert te.is_repeat_visit == w.payload.is_repeat_visit
-    assert te.city == w.payload.city
-    # Tags parsing
-    assert isinstance(te.tags, list)
-    assert all(isinstance(t, str) and t and t == t.strip() for t in te.tags)
-    # body_json round-trips (uses snake_case in mode="json")
-    assert json.loads(te.body_json)["payload"]["captured_url"] == w.payload.captured_url
+    body = json.loads(te.body_json)
+    payload = body["payload"]
+    assert payload["captured_url"] == w.payload.captured_url
+    assert payload["referrer"] == w.payload.referrer
+    assert payload["is_repeat_visit"] == w.payload.is_repeat_visit
+    assert payload["city"] == w.payload.city
+    assert payload["state"] == w.payload.state
+    assert payload["zipcode"] == w.payload.zipcode
+    assert payload["tags"] == w.payload.tags
 
 
-def test_attio_get_operations_repeat_visit_sets_flag() -> None:
+def test_attio_get_operations_repeat_visit_sets_subtype() -> None:
     w = _load("rb2b.visit.repeat_visit.redacted.json")
     te = [
         o for o in w.attio_get_operations() if type(o).__name__ == "UpsertTrackingEvent"
     ][0]
-    assert te.is_repeat_visit is True
+    assert te.event_subtype == "repeat_visit"
+
+
+def test_attio_get_operations_first_visit_sets_subtype() -> None:
+    """Falsy/missing is_repeat_visit maps to ``first_visit`` — safe default
+    for the "is this a hot-prospect first touch?" query.
+    """
+    w = _load("rb2b.visit.person_only.redacted.json")
+    te = [
+        o for o in w.attio_get_operations() if type(o).__name__ == "UpsertTrackingEvent"
+    ][0]
+    assert te.event_subtype == "first_visit"
 
 
 def test_linkedin_canonical_url_passes_through() -> None:

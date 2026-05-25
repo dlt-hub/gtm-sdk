@@ -390,42 +390,26 @@ def build_tracking_event_values(
 ) -> dict[str, list[dict[str, Any]]]:
     """Build the Attio values dict for a tracking_events record write.
 
-    Omits optional slugs that are None / empty so we don't accidentally
-    clobber existing values with a write of an empty payload.
+    Emits only the slugs that exist on the live workspace schema
+    (``external_id, name, event_type, event_subtype, body, contact,
+    timestamp``). The ``timestamp`` attribute is a *date* in Attio, not a
+    datetime, so the event timestamp is truncated to day precision —
+    sub-day ordering survives inside ``body_json`` and in the GCS raw
+    landing. ``contact`` is People-only; ``owner`` is left for human
+    curation. See ai-wq6 for the prior shape that wrote seven dead slugs
+    (``captured_url`` and friends).
     """
     values: dict[str, list[dict[str, Any]]] = {
+        "external_id": _scalar_value(input.external_id),
         "name": _scalar_value(input.name),
         "event_type": _select_value(input.event_type),
-        "external_id": _scalar_value(input.external_id),
-        "captured_url": _scalar_value(input.captured_url),
+        "timestamp": _scalar_value(input.event_timestamp.date().isoformat()),
         "body": _scalar_value(input.body_json),
-        "timestamp": _scalar_value(input.event_timestamp.isoformat()),
     }
-    if input.referrer is not None:
-        values["referrer"] = _scalar_value(input.referrer)
-    if input.is_repeat_visit is not None:
-        values["is_repeat_visit"] = _scalar_value(input.is_repeat_visit)
-    if input.tags:
-        values["tags"] = _multiselect_values(input.tags)
-    if input.city is not None:
-        values["city"] = _scalar_value(input.city)
-    if input.state is not None:
-        values["state"] = _scalar_value(input.state)
-    if input.zipcode is not None:
-        values["zipcode"] = _scalar_value(input.zipcode)
+    if input.event_subtype is not None:
+        values["event_subtype"] = _select_value(input.event_subtype)
     if input.related_person_record_id is not None:
         person_ref = format_person_record_ref(input.related_person_record_id)
         if person_ref:
-            values["people"] = person_ref
-    if input.related_company_record_id is not None:
-        company_ref = _record_ref_companies(input.related_company_record_id)
-        if company_ref:
-            values["company"] = company_ref
+            values["contact"] = person_ref
     return values
-
-
-def _record_ref_companies(record_id: str | None) -> list[dict[str, Any]] | None:
-    """Format a company record reference."""
-    if not record_id:
-        return None
-    return [{"target_object": "companies", "target_record_id": record_id}]

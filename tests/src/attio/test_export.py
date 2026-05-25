@@ -579,16 +579,14 @@ def test_handle_upsert_company_merge_strips_populated_slugs(
 
 
 @patch("src.attio.export.find_or_create_tracking_event")
-def test_handle_upsert_tracking_event_resolves_refs(mock_libs) -> None:
-    """Test that refs are resolved through LookupTable and passed to the lib."""
+def test_handle_upsert_tracking_event_resolves_person_ref(mock_libs) -> None:
+    """Test that the PersonRef is resolved through LookupTable and forwarded."""
     mock_libs.return_value = MagicMock(success=True, record_id="te_1", action="created")
 
     from src.attio.export import _handle_upsert_tracking_event
     from src.attio.ops import (
-        CompanyRef,
         PersonRef,
         UpsertPerson,
-        UpsertCompany,
         UpsertTrackingEvent,
     )
 
@@ -597,21 +595,16 @@ def test_handle_upsert_tracking_event_resolves_refs(mock_libs) -> None:
         UpsertPerson(matching_attribute="email", email="a@b.test"),
         "pe_1",
     )
-    table.record(
-        UpsertCompany(domain="b.test"),
-        "co_1",
-    )
 
     result = _handle_upsert_tracking_event(
         UpsertTrackingEvent(
             external_id="rb2b:abc123",
             name="https://example.test/pricing",
             event_type="rb2b_visit",
+            event_subtype="repeat_visit",
             event_timestamp=datetime(2026, 5, 14, tzinfo=timezone.utc),
             body_json='{"raw": "payload"}',
-            captured_url="https://example.test/pricing",
             subject_person=PersonRef(attribute="email", value="a@b.test"),
-            subject_company=CompanyRef(domain="b.test"),
         ),
         table,
     )
@@ -619,7 +612,7 @@ def test_handle_upsert_tracking_event_resolves_refs(mock_libs) -> None:
     assert result.success is True
     input_arg = mock_libs.call_args.args[0]
     assert input_arg.related_person_record_id == "pe_1"
-    assert input_arg.related_company_record_id == "co_1"
+    assert input_arg.event_subtype == "repeat_visit"
 
 
 @patch("src.attio.export.find_or_create_tracking_event")
@@ -635,7 +628,6 @@ def test_handle_upsert_tracking_event_unresolved_ref_is_fatal(mock_libs) -> None
             event_type="rb2b_visit",
             event_timestamp=datetime(2026, 5, 14, tzinfo=timezone.utc),
             body_json='{"raw": "payload"}',
-            captured_url="https://example.test/pricing",
             subject_person=PersonRef(attribute="email", value="missing@b.test"),
         ),
         LookupTable(),  # empty — nothing to resolve
@@ -662,7 +654,6 @@ def test_handle_upsert_tracking_event_no_refs_passes_none(mock_libs) -> None:
             event_type="rb2b_visit",
             event_timestamp=datetime(2026, 5, 14, tzinfo=timezone.utc),
             body_json='{"raw": "payload"}',
-            captured_url="https://example.test/pricing",
         ),
         LookupTable(),
     )
@@ -670,4 +661,3 @@ def test_handle_upsert_tracking_event_no_refs_passes_none(mock_libs) -> None:
     assert result.success is True
     input_arg = mock_libs.call_args.args[0]
     assert input_arg.related_person_record_id is None
-    assert input_arg.related_company_record_id is None

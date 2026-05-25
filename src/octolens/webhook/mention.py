@@ -1,14 +1,14 @@
 """Webhook ETL contract for Octolens mention ingestion."""
 
 import re
-from typing import Annotated, Any, ClassVar, Literal, cast
+from typing import Any, ClassVar, Literal, cast
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field
 
 from libs.attio.values import normalize_linkedin_url
 from libs.dlt.bucket_naming import etl_bucket_name, raw_bucket_name
 from libs.octolens import RelevanceScore, Webhook as OctolensMentionWebhook
-from libs.webhook.filter import WebhookFilter
+from libs.webhook.filter import WebhookFilter, WebhookFilters
 from src.octolens.utils import generate_gcs_filename
 
 
@@ -80,26 +80,19 @@ def split_author_name(full: str | None) -> tuple[str | None, str | None]:
 
 
 class RelevanceScoreFilter(WebhookFilter):
-    """Drop mentions whose relevance_score is in ``excluded_scores``."""
+    """Drop mentions whose relevance_score is in ``excluded_scores``.
+
+    Auto-registers in ``WebhookFilter._registry`` under the ``type`` tag so
+    a JSON-loaded filter list with ``{"type": "relevance_score", ...}``
+    round-trips back to this concrete subclass via the shared
+    ``WebhookFilters`` validator.
+    """
 
     type: Literal["relevance_score"] = "relevance_score"
     excluded_scores: list[RelevanceScore] = Field(default_factory=list)
 
-    def should_exclude(self, webhook: "Webhook") -> bool:
+    def should_exclude(self, webhook: Any) -> bool:
         return webhook.data.relevance_score in self.excluded_scores
-
-
-AnyWebhookFilter = Annotated[RelevanceScoreFilter, Field(discriminator="type")]
-
-
-class WebhookFilters(RootModel[list[AnyWebhookFilter]]):
-    """Ordered list of filters; serializes to a JSON array."""
-
-    def should_exclude(self, webhook: "Webhook") -> WebhookFilter | None:
-        for f in self.root:
-            if f.should_exclude(webhook):
-                return f
-        return None
 
 
 DEFAULT_FILTERS: WebhookFilters = WebhookFilters(

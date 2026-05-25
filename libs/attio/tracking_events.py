@@ -14,7 +14,6 @@ from libs.attio.sdk_boundary import (
 from libs.attio.values import build_tracking_event_values
 
 _OBJECT = "tracking_events"
-_MULTISELECT_FIELDS: tuple[str, ...] = ("tags",)
 
 
 def find_or_create_tracking_event(input: TrackingEventInput) -> ReliabilityEnvelope:
@@ -67,12 +66,24 @@ def find_or_create_tracking_event(input: TrackingEventInput) -> ReliabilityEnvel
 
 
 def _ensure_option_vocabulary(input: TrackingEventInput) -> None:
-    """Seed any multiselect option titles the payload references just-in-time."""
-    if input.tags:
+    """Seed select-option titles the payload references just-in-time.
+
+    ``event_type`` and ``event_subtype`` are both open-ended selects per
+    their workspace descriptions ("Expand as new types are tracked.",
+    "Kept open-ended for future subtypes."). New sources (rb2b, fathom,
+    caldotcom lifecycle...) self-register their option titles on first
+    write rather than requiring a manual bootstrap step.
+    """
+    ensure_select_options(
+        target_object=_OBJECT,
+        attribute_slug="event_type",
+        options=[input.event_type],
+    )
+    if input.event_subtype is not None:
         ensure_select_options(
             target_object=_OBJECT,
-            attribute_slug="tags",
-            options=list(input.tags),
+            attribute_slug="event_subtype",
+            options=[input.event_subtype],
         )
 
 
