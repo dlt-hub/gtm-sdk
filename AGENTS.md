@@ -28,14 +28,15 @@ Rules for working in this repo. `CLAUDE.md` and `WARP.md` symlink here. The repo
 
 ## Webhook deploys
 
-`webhooks/export_to_attio.py` and `webhooks/export_to_gcp_etl.py` ship one Modal app per webhook source, but each file uses a `WebhookModelToReplace` placeholder so the working tree stays source-agnostic. **`modal deploy` on the file as-is fails with `NameError: WebhookModelToReplace is not defined`.**
+`webhooks/export_to_attio.py`, `webhooks/export_to_gcp_etl.py`, and `webhooks/export_to_gcp_raw.py` ship one Modal app per webhook source, but each file uses a `WebhookModelToReplace` placeholder so the working tree stays source-agnostic. **`modal deploy` on the file as-is fails with `NameError: WebhookModelToReplace is not defined`.**
 
-Use `scripts/deploy-webhook.sh <handler> <source>` (or `<handler> --all`) to substitute the placeholder, deploy, and restore in one step. The script encodes every footgun in the "Scripted deploy pitfalls" section below.
+Use `scripts/deploy-webhook.sh <handler> <source>` (or `<handler> --all`) to substitute the placeholder, deploy, and restore in one step. The script auto-discovers valid handlers (any `webhooks/*.py` containing the placeholder) and sources (the `Webhook as <Alias>` imports inside the handler), and preflights per-source GCS buckets when the handler routes to `gs://` (etl, raw). It encodes every footgun in the "Scripted deploy pitfalls" section below.
 
 ```shell
 set -a && source .env.local && set +a   # once per shell
 scripts/deploy-webhook.sh export_to_attio CaldotcomBookingWebhook
 scripts/deploy-webhook.sh export_to_gcp_etl --all
+scripts/deploy-webhook.sh export_to_gcp_raw --all
 ```
 
 Each source is a separate Modal app, so deploying one source does not redeploy the others — bump them individually after shared-code changes (e.g. `libs/dlt/`) or stale containers will keep importing removed symbols. Do not commit the substituted form; the script's `trap` restores the placeholder even if `modal deploy` fails or the script is interrupted.

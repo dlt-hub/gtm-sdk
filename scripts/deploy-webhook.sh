@@ -10,9 +10,13 @@
 #   scripts/deploy-webhook.sh <handler> <source>
 #   scripts/deploy-webhook.sh <handler> --all
 #
-# <handler>: export_to_attio | export_to_gcp_etl
-# <source> : CaldotcomBookingWebhook | FathomCallWebhook | FathomMessageWebhook
-#            | OctolensMentionWebhook | Rb2bVisitWebhook
+# <handler>: any webhooks/*.py file containing the WebhookModelToReplace
+#            placeholder (e.g. export_to_attio, export_to_gcp_etl,
+#            export_to_gcp_raw). Discovered at runtime — no script edit
+#            required when a new handler adopts the placeholder pattern.
+# <source> : any 'Webhook as <Alias>' alias imported by <handler>.py
+#            (e.g. CaldotcomBookingWebhook, FathomCallWebhook,
+#            FathomMessageWebhook, OctolensMentionWebhook, Rb2bVisitWebhook).
 #
 # What it does:
 #   1. Refuses to start if INFISICAL_PROJECT_ID or INFISICAL_TOKEN is unset.
