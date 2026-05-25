@@ -139,26 +139,23 @@ bd close <id>         # Complete work
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+**When ending a work session**, walk the checklist below. Pushing is a shared-state action — the rules differ by branch.
 
-**MANDATORY WORKFLOW:**
+**WORKFLOW:**
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
 3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
+4. **Commit** locally with a clear message
+5. **Push policy (branch-aware):**
+   - On `agent/*` or `feature/*` branches: you MAY `git pull --rebase && git push` without asking — these are scratch branches owned by the current task.
+   - On `main`, `master`, or any release/protected branch: **DO NOT push without explicit user confirmation.** Stop after the commit, say what would be pushed, and ask. The user pushing themselves is the default.
+   - If unsure which category the branch falls into, treat it as protected and ask.
+6. **Clean up** - Clear stashes, prune remote branches (only after push is authorized)
 7. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+- Committing locally is reversible; pushing to a shared branch is not. Match the action to the blast radius.
+- NEVER force-push without an explicit ask, regardless of branch.
+- If a push fails, surface the error and ask before resolving — do not retry in a loop or rewrite history.
 <!-- END BEADS INTEGRATION -->
