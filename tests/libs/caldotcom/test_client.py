@@ -50,8 +50,8 @@ def _client_with_handler(
     # we don't actually hit the network.
     c._client = httpx.Client(  # noqa: SLF001 — test surgery  # pyright: ignore[reportPrivateUsage]
         base_url=CALCOM_API_BASE,
+        params={"apiKey": "cal_fake_token"},
         headers={
-            "Authorization": "Bearer cal_fake_token",
             "cal-api-version": CALCOM_API_VERSION,
             "Accept": "application/json",
         },
@@ -65,7 +65,8 @@ def test_get_booking_returns_payload_when_200() -> None:
     def respond(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/v2/bookings/calcom-booking-xyz"
-        assert request.headers["Authorization"] == "Bearer cal_fake_token"
+        assert request.url.params["apiKey"] == "cal_fake_token"
+        assert "Authorization" not in request.headers
         assert request.headers["cal-api-version"] == CALCOM_API_VERSION
         return httpx.Response(
             200,

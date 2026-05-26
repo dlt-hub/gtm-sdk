@@ -31,10 +31,14 @@ class CalcomClient:
     """Thin synchronous client for the Cal.com v2 API."""
 
     def __init__(self, api_key: str, *, timeout: float = 10.0) -> None:
+        # Cal.com v2 personal API keys (``cal_live_...``) authenticate via the
+        # ``?apiKey=`` query parameter. ``Authorization: Bearer`` is only valid
+        # for managed-user / OAuth tokens — sending a personal key as a Bearer
+        # token returns 401 ``CustomThrottlerGuard - Invalid API Key``.
         self._client = httpx.Client(
             base_url=CALCOM_API_BASE,
+            params={"apiKey": api_key},
             headers={
-                "Authorization": f"Bearer {api_key}",
                 "cal-api-version": CALCOM_API_VERSION,
                 "Accept": "application/json",
             },
