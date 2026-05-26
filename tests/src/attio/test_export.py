@@ -511,7 +511,146 @@ def test_handle_upsert_person_merge_strips_populated_slugs(
     person_input = mock_upsert.call_args.args[0]
     assert person_input.title is None  # stripped (existing was populated)
     assert person_input.city == "Brooklyn"  # kept (existing was None)
-    mock_get_values.assert_called_once_with(email="a@b.test", linkedin=None)
+    mock_get_values.assert_called_once_with(
+        matching_attribute="email",
+        email="a@b.test",
+        linkedin=None,
+        github_handle=None,
+    )
+
+
+@patch("src.attio.export.get_person_values")
+@patch("src.attio.export.libs_upsert_person")
+def test_handle_upsert_person_merge_keeps_title_when_existing_title_empty(
+    mock_upsert,
+    mock_get_values,
+) -> None:
+    """Bug 1 regression: existing has name but empty title — incoming title must NOT be stripped."""
+    mock_get_values.return_value = {
+        "name": [{"full_name": "Existing Person"}],
+        "title": [],
+        "primary_location": None,
+    }
+    mock_upsert.return_value.success = True
+    mock_upsert.return_value.record_id = "pe_1"
+
+    from src.attio.export import _handle_upsert_person
+
+    _handle_upsert_person(
+        UpsertPerson(
+            matching_attribute="email",
+            email="a@b.test",
+            title="Incoming Title",
+            merge_only_if_empty=["title"],
+        ),
+        LookupTable(),
+    )
+
+    person_input = mock_upsert.call_args.args[0]
+    assert person_input.title == "Incoming Title", (
+        "Bug 1: title was nulled even though existing record had an empty title"
+    )
+
+
+@patch("src.attio.export.get_person_values")
+@patch("src.attio.export.libs_upsert_person")
+def test_handle_upsert_person_merge_strips_title_when_existing_title_populated(
+    mock_upsert,
+    mock_get_values,
+) -> None:
+    """Bug 1 inverse: existing has populated title — incoming title IS stripped."""
+    mock_get_values.return_value = {
+        "name": [],
+        "title": [{"value": "CEO"}],
+        "primary_location": None,
+    }
+    mock_upsert.return_value.success = True
+    mock_upsert.return_value.record_id = "pe_1"
+
+    from src.attio.export import _handle_upsert_person
+
+    _handle_upsert_person(
+        UpsertPerson(
+            matching_attribute="email",
+            email="a@b.test",
+            title="Incoming Title",
+            merge_only_if_empty=["title"],
+        ),
+        LookupTable(),
+    )
+
+    person_input = mock_upsert.call_args.args[0]
+    assert person_input.title is None
+
+
+@patch("src.attio.export.get_person_values")
+@patch("src.attio.export.libs_upsert_person")
+def test_handle_upsert_person_merge_uses_github_handle_lookup(
+    mock_upsert,
+    mock_get_values,
+) -> None:
+    """T3 (Bug 2): matching_attribute=github_handle routes lookup correctly
+    and protected fields on the github-matched record are honored."""
+    mock_get_values.return_value = {"title": [{"value": "CTO"}]}
+    mock_upsert.return_value.success = True
+    mock_upsert.return_value.record_id = "pe_1"
+
+    from src.attio.export import _handle_upsert_person
+
+    _handle_upsert_person(
+        UpsertPerson(
+            matching_attribute="github_handle",
+            github_handle="octocat",
+            title="Incoming Title",
+            merge_only_if_empty=["title"],
+        ),
+        LookupTable(),
+    )
+
+    mock_get_values.assert_called_once_with(
+        matching_attribute="github_handle",
+        email=None,
+        linkedin=None,
+        github_handle="octocat",
+    )
+    person_input = mock_upsert.call_args.args[0]
+    assert person_input.title is None
+
+
+@patch("src.attio.export.get_person_values")
+@patch("src.attio.export.libs_upsert_person")
+def test_handle_upsert_person_merge_lookup_aligned_with_matching_attribute(
+    mock_upsert,
+    mock_get_values,
+) -> None:
+    """T4 (Bug 3): matching_attribute=linkedin with both email and linkedin on
+    the op. Helper must be called with matching_attribute=linkedin so the read
+    targets the same record the write will touch."""
+    mock_get_values.return_value = {"title": [{"value": "Existing"}]}
+    mock_upsert.return_value.success = True
+    mock_upsert.return_value.record_id = "pe_1"
+
+    from src.attio.export import _handle_upsert_person
+
+    _handle_upsert_person(
+        UpsertPerson(
+            matching_attribute="linkedin",
+            email="a@b.test",
+            linkedin="https://linkedin.com/in/foo",
+            title="Incoming",
+            merge_only_if_empty=["title"],
+        ),
+        LookupTable(),
+    )
+
+    mock_get_values.assert_called_once_with(
+        matching_attribute="linkedin",
+        email="a@b.test",
+        linkedin="https://linkedin.com/in/foo",
+        github_handle=None,
+    )
+    person_input = mock_upsert.call_args.args[0]
+    assert person_input.title is None
 
 
 @patch("src.attio.export.get_company_values")

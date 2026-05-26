@@ -195,12 +195,17 @@ def _handle_upsert_person(
     zipcode = op.zipcode
 
     if op.merge_only_if_empty:
-        existing = get_person_values(email=op.email, linkedin=op.linkedin)
+        existing = get_person_values(
+            matching_attribute=op.matching_attribute,
+            email=op.email,
+            linkedin=op.linkedin,
+            github_handle=op.github_handle,
+        )
         if existing is not None:
             # For each field in merge_only_if_empty, check if existing has a non-empty value
             if "title" in op.merge_only_if_empty and _has_populated_value(
                 existing,
-                "name",
+                "title",
             ):
                 title = None
             if "city" in op.merge_only_if_empty and _has_populated_value(

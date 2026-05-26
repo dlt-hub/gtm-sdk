@@ -623,21 +623,66 @@ def upsert_person(
 
 
 def get_person_values(
+    *,
+    matching_attribute: Literal["email", "linkedin", "github_handle"],
     email: str | None = None,
     linkedin: str | None = None,
+    github_handle: str | None = None,
 ) -> dict[str, Any] | None:
-    """Look up a person by email or linkedin; return their field values dict or None."""
-    if not email and not linkedin:
-        return None
+    """Look up a person by the identifier matching ``matching_attribute``.
+
+    The lookup uses exactly one identifier — the one named by
+    ``matching_attribute`` — so the read targets the same record that a
+    write keyed on the same ``matching_attribute`` will touch. Callers must
+    not assume email-then-linkedin OR-ing; supply ``matching_attribute``
+    explicitly to keep read and write aligned (see ``merge_only_if_empty``
+    in ``src.attio.export._handle_upsert_person``).
+
+    Raises:
+        ValueError: if ``matching_attribute`` is unknown, or if the
+            corresponding identifier is None/empty. Surfaces caller bugs
+            loudly instead of silently degrading into an unprotected
+            overwrite.
+
+    Returns:
+        The Attio record's ``values`` dict, or None if no record matches.
+        Transient Attio query errors are swallowed and degrade to None
+        (existing safety net — keeps the upsert from cascading-failing
+        on a flaky read).
+    """
+    identifier_map = {
+        "email": ("email_addresses", email),
+        "linkedin": ("linkedin", linkedin),
+        "github_handle": ("github_handle", github_handle),
+    }
+    if matching_attribute not in identifier_map:
+        raise ValueError(
+            f"get_person_values: unknown matching_attribute={matching_attribute!r}",
+        )
+    filter_key, filter_value = identifier_map[matching_attribute]
+    if not filter_value:
+        raise ValueError(
+            f"get_person_values: matching_attribute={matching_attribute!r} "
+            f"requires non-empty {matching_attribute!r}",
+        )
+
+    # LinkedIn URLs vary on scheme, host prefix, and trailing slash. The write
+    # path in ``upsert_person`` searches the full variant set via
+    # ``_search_people_raw``; the read here must too, otherwise a non-canonical
+    # URL on the op can miss the existing record and silently bypass
+    # ``merge_only_if_empty`` protection while the write still hits it.
+    filter_: dict[str, Any]
+    if matching_attribute == "linkedin":
+        variants = _linkedin_url_variants(filter_value)
+        if len(variants) == 1:
+            filter_ = {filter_key: variants[0]}
+        else:
+            filter_ = {"$or": [{filter_key: v} for v in variants]}
+    else:
+        filter_ = {filter_key: filter_value}
 
     try:
         with get_client() as client:
-            filter_: dict[str, Any] = {}
-            if email:
-                filter_["email_addresses"] = email
-            elif linkedin:
-                filter_["linkedin"] = linkedin
-
             response = client.records.post_v2_objects_object_records_query(
                 object="people",
                 filter_=filter_,
