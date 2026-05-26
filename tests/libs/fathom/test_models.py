@@ -79,5 +79,6 @@ def test_webhook_validates_payload_with_unassigned_action_items() -> None:
         "url": "https://fathom.video/calls/1",
     }
     w = Webhook.model_validate(payload)
+    assert w.action_items is not None
     assert len(w.action_items) == 1
     assert w.action_items[0].assignee.name is None
