@@ -591,3 +591,196 @@ def test_substituted_handler_emits_log_schema(
     assert events & terminal, (
         f"expected at least one terminal event in {terminal}; got {events}"
     )
+
+
+# ---------------------------------------------------------------------------
+# OTLP log-sink mirror coverage (ai-uir)
+#
+# When init_log_exporter() has wired an OTLP logger, every libs/logging
+# .structured.log() call should also emit an OTLP LogRecord carrying the
+# same fields as attributes. The tests below replace the OTLP logger with
+# an in-memory collector and assert the attribute schema matches the
+# stdout schema covered by test_substituted_handler_emits_log_schema.
+# ---------------------------------------------------------------------------
+
+
+class _InMemoryOtlpLogger:
+    """Stand-in for the OTLP Logger returned by ``init_log_exporter``.
+
+    Captures every ``emit(LogRecord)`` call so tests can assert on the
+    attribute payload without spinning up a real exporter / collector.
+    """
+
+    def __init__(self) -> None:
+        self.records: list[Any] = []
+
+    def emit(self, record: Any) -> None:
+        self.records.append(record)
+
+
+@pytest.fixture
+def _otlp_capture(monkeypatch: pytest.MonkeyPatch) -> _InMemoryOtlpLogger:
+    """Replace the structured logger's OTLP sink with an in-memory capture.
+
+    ``get_otlp_logger`` uses strict per-``service_name`` lookup in
+    production, but each parametrized webhook sets a different ``source``
+    at module import (APP_NAME / BUCKET_NAME), so we bypass the lookup
+    entirely and have ``get_otlp_logger`` return the capture regardless of
+    the requested name. The strict-lookup contract is exercised separately
+    in ``tests/libs/test_telemetry.py``.
+    """
+    import libs.telemetry as telemetry_module
+
+    capture = _InMemoryOtlpLogger()
+
+    def _always_return_capture(_name: str | None = None) -> _InMemoryOtlpLogger:
+        return capture
+
+    monkeypatch.setattr(telemetry_module, "get_otlp_logger", _always_return_capture)
+    return capture
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "source_alias"),
+    _matrix(),
+    ids=lambda v: v,
+)
+def test_substituted_handler_mirrors_to_otlp_when_sink_wired(
+    handler_name: str,
+    source_alias: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    _otlp_capture: _InMemoryOtlpLogger,
+) -> None:
+    """Every (handler, source) combo: when an OTLP logger is wired, each
+    structured.log() call also fires an OTLP LogRecord with matching
+    attributes (source, request_id, event in body)."""
+    module = _load_substituted_handler(handler_name, source_alias, tmp_path)
+    _STUBS[handler_name](module, monkeypatch)
+
+    payload_path = SAMPLES_DIR / _fixture_for(source_alias)
+    payload = orjson.loads(payload_path.read_bytes())
+    request_id = f"otlp-{handler_name}-{source_alias}"
+    request = _make_request({"X-Request-Id": request_id})
+    capsys.readouterr()
+
+    try:
+        _CALLERS[handler_name](module, payload, request)
+    except Exception:  # noqa: BLE001, S110  # trunk-ignore(bandit/B110)
+        pass
+
+    assert _otlp_capture.records, (
+        f"no OTLP records emitted for {handler_name} + {source_alias}"
+    )
+
+    request_ids = {r.attributes.get("request_id") for r in _otlp_capture.records}
+    assert request_ids == {request_id}, (
+        f"all OTLP records for one request must share request_id; got {request_ids}"
+    )
+
+    sources = {r.attributes.get("source") for r in _otlp_capture.records}
+    assert len(sources) == 1, f"OTLP source must be consistent; got {sources}"
+    assert next(iter(sources)), "OTLP source attribute must be non-empty"
+
+    bodies = {r.body for r in _otlp_capture.records}
+    assert "webhook.received" in bodies, (
+        f"expected webhook.received in OTLP bodies; got {bodies}"
+    )
+    terminal = {"webhook.completed", "webhook.validation_failed", "webhook.error"}
+    assert bodies & terminal, (
+        f"expected at least one terminal OTLP body in {terminal}; got {bodies}"
+    )
+
+
+def test_otlp_mirror_sanitizes_none_and_nested_values(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    _otlp_capture: _InMemoryOtlpLogger,
+) -> None:
+    """OTLP attribute values must be primitives — None / dict / nested values
+    would otherwise make ``logger.emit`` raise and the record would be lost.
+
+    Regression test for the sanitizer in ``_emit_to_otlp``: ``None`` is
+    dropped, primitives pass through, nested values get JSON-encoded.
+    """
+    capsys.readouterr()
+    structured.set_source("sanitize-test")
+    structured.set_request_id("req-sanitize")
+    structured.log(
+        "webhook.completed",
+        status="ok",
+        duration_ms=42,
+        skipped_reason=None,  # must be dropped, not emitted as null
+        plan={"op_count": 3, "ops": ["create", "update"]},  # JSON-encoded
+        tags=["a", "b"],  # primitive list — passes through
+    )
+
+    assert len(_otlp_capture.records) == 1
+    attrs = dict(_otlp_capture.records[0].attributes)
+    assert "skipped_reason" not in attrs, "None values must be dropped"
+    assert attrs["status"] == "ok"
+    assert attrs["duration_ms"] == 42
+    assert attrs["tags"] == ["a", "b"]
+    assert isinstance(attrs["plan"], str), (
+        "nested objects must be JSON-encoded, not passed as-is"
+    )
+    assert "op_count" in attrs["plan"]
+
+
+def test_otlp_mirror_json_encodes_mixed_primitive_lists(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    _otlp_capture: _InMemoryOtlpLogger,
+) -> None:
+    """OTLP requires homogeneous primitive arrays. A list like ``[1, "2"]``
+    passes the primitive-element check but still violates the spec, so the
+    sanitizer must JSON-encode it rather than pass it through and risk the
+    exporter rejecting the record."""
+    capsys.readouterr()
+    structured.set_source("sanitize-mixed")
+    structured.set_request_id("req-mixed")
+    structured.log(
+        "webhook.received",
+        mixed_list=[1, "two", True],  # all primitive, but heterogeneous
+        empty_list=[],  # empty: ambiguous element type
+        homogeneous_strs=["a", "b", "c"],
+        homogeneous_ints=[1, 2, 3],
+    )
+    attrs = dict(_otlp_capture.records[0].attributes)
+    assert isinstance(attrs["mixed_list"], str), (
+        f"mixed-type list must be JSON-encoded; got {type(attrs['mixed_list'])}"
+    )
+    assert isinstance(attrs["empty_list"], str), (
+        "empty list must be JSON-encoded (element type unknown)"
+    )
+    assert attrs["homogeneous_strs"] == ["a", "b", "c"]
+    assert attrs["homogeneous_ints"] == [1, 2, 3]
+
+
+def test_log_does_not_emit_otlp_when_no_sink_wired(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sanity check: with no OTLP logger wired, structured.log() still
+    writes the stdout JSON line and the in-memory capture stays empty.
+
+    Guards the no-op gate that keeps OTLP additive — we never want a
+    misconfigured init to swallow stdout logging."""
+    import libs.telemetry as telemetry_module
+
+    monkeypatch.setattr(telemetry_module, "_otlp_loggers", {}, raising=False)
+    capture = _InMemoryOtlpLogger()  # never installed
+    capsys.readouterr()
+
+    structured.set_source("otlp-noop-test")
+    structured.set_request_id("req-noop")
+    structured.log("webhook.received", payload_bytes=1)
+
+    assert not capture.records
+    out = capsys.readouterr().out.strip()
+    assert out, "stdout JSON line must still be emitted when OTLP is disabled"
+    line = orjson.loads(out)
+    assert line["event"] == "webhook.received"
+    assert line["source"] == "otlp-noop-test"
+    assert line["request_id"] == "req-noop"

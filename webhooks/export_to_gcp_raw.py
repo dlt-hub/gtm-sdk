@@ -1,6 +1,7 @@
 # trunk-ignore-all(ruff/PGH003,trunk/ignore-does-nothing)
 from __future__ import annotations
 
+import os
 import time
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -21,6 +22,7 @@ from libs.logging.structured import (
     set_source,
     webhook_request_context,
 )
+from libs.telemetry import init_log_exporter
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -67,6 +69,34 @@ BUCKET_NAME: str = WebhookModel.raw_get_bucket_name()
 # Tag every log line emitted from this container with the bucket name so
 # Modal logs filter cleanly per source.
 set_source(BUCKET_NAME)
+
+# Initialize the OTLP log exporter so structured events also ship to whatever
+# sink the container's OTEL env vars point at. No-op if none are set.
+init_log_exporter(BUCKET_NAME)
+
+
+def _otel_secret() -> modal.Secret:
+    """Inline Modal Secret carrying the OTLP-sink env vars for this container.
+
+    See ``webhooks/export_to_gcp_etl.py:_otel_secret`` for full rationale —
+    duplicated here rather than extracted to a shared helper because each
+    handler module must remain independently deployable (no cross-handler
+    runtime coupling beyond ``libs/``).
+    """
+    payload: dict[str, str | None] = {}
+    for opt in (
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+        "HYPERDX_API_KEY",
+        "HYPERDX_OTLP_ENDPOINT",
+    ):
+        v = os.environ.get(opt, "").strip()
+        if v:
+            payload[opt] = v
+    return modal.Secret.from_dict(payload)
+
 
 image: Image = modal.Image.debian_slim().uv_pip_install(
     "fastapi[standard]",
@@ -206,7 +236,8 @@ def _handle(json: dict[str, Any], request: Request) -> str:
             name=name,
         )
         for name in WebhookModel.modal_get_secret_collection_names()
-    ],
+    ]
+    + [_otel_secret()],
     region="us-east4",
     enable_memory_snapshot=False,
 )

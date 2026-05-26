@@ -337,6 +337,74 @@ def _preflight_infisical_keys(
         print(f"  {key} ✓")
 
 
+# Optional OTLP-sink env vars forwarded to deployed webhook containers. None
+# of these is required — the sink is opt-in per environment, and a missing
+# key just means "no OTLP exporter wired, stdout-only logging." We probe
+# them so a misconfigured Infisical env surfaces at deploy time instead of
+# silently dropping records once Hookdeck starts firing.
+_OTEL_OPTIONAL_KEYS = (
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    # Standard OTel headers env vars — let non-HyperDX sinks (Datadog
+    # DD-API-KEY, Grafana Cloud basic auth, custom collector tokens) pass
+    # arbitrary auth via the spec-compliant hook the OTLPLogExporter reads
+    # automatically when no explicit ``headers=`` is supplied.
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+    "HYPERDX_API_KEY",
+    "HYPERDX_OTLP_ENDPOINT",
+)
+
+
+def _preflight_otel_log_sink_keys() -> None:
+    """Warn-only probe for the OTLP-sink env vars in the target Infisical env.
+
+    Unlike ``_preflight_infisical_keys``, this does NOT fail the deploy when
+    a key is missing — the OTLP sink is opt-in per env. We print ``✓`` for
+    present keys and a notice for absent ones so the operator sees, at
+    deploy time, whether structured logs will ship to a sink or stop at
+    Modal stdout.
+
+    Uses the same "returncode 0 + empty stdout = missing" heuristic
+    documented at ``_preflight_infisical_keys`` lines 263-271 — the
+    ``infisical secrets get`` CLI exits 0 for both present and missing
+    keys, so a returncode-only check would be theater.
+    """
+    env_slug = os.environ["INFISICAL_ENV"]
+    print(
+        f"Probing OTLP-sink keys in env={env_slug} (optional): "
+        f"{' '.join(_OTEL_OPTIONAL_KEYS)}",
+    )
+    any_present = False
+    for key in _OTEL_OPTIONAL_KEYS:
+        proc = subprocess.run(
+            [
+                "infisical",
+                "secrets",
+                "get",
+                key,
+                "--projectId",
+                os.environ["INFISICAL_PROJECT_ID"],
+                "--token",
+                os.environ["INFISICAL_TOKEN"],
+                f"--env={env_slug}",
+                "--plain",
+                "--silent",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            print(f"  {key} ✓")
+            any_present = True
+        else:
+            print(f"  {key} (not set)")
+    if not any_present:
+        print("  OTLP sink disabled for this deploy (no OTEL env vars set).")
+
+
 _BUCKET_METHOD_RE = re.compile(r"WebhookModel\.([a-z_]+_get_bucket_name)")
 
 
@@ -892,6 +960,7 @@ def main() -> int:
     _preflight_working_tree()
     _preflight_modal_secrets()
     _preflight_infisical_keys(handler_file, sources_to_deploy)
+    _preflight_otel_log_sink_keys()
     _preflight_gcs_buckets(handler_file, sources_to_deploy)
 
     _handler = handler

@@ -69,7 +69,23 @@ def bootstrap_secret() -> modal.Secret:
         "INFISICAL_TOKEN": os.environ.get("INFISICAL_TOKEN", ""),
         "INFISICAL_PROJECT_ID": os.environ.get("INFISICAL_PROJECT_ID", ""),
     }
-    for opt in ("INFISICAL_HOST", "INFISICAL_ENV"):
+    # Optional Infisical + OTLP-sink env vars. The OTLP keys are picked up by
+    # ``libs.telemetry.init_log_exporter`` at container import; absent keys
+    # keep the sink disabled and stdout-only logging unchanged. The two
+    # ``..._HEADERS`` vars are the standard OTel hook non-HyperDX sinks use
+    # to pass custom auth (Datadog DD-API-KEY, Grafana Cloud basic, etc.) —
+    # the OTLPLogExporter reads them automatically when no explicit
+    # ``headers=`` is passed by ``init_log_exporter``.
+    for opt in (
+        "INFISICAL_HOST",
+        "INFISICAL_ENV",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+        "HYPERDX_API_KEY",
+        "HYPERDX_OTLP_ENDPOINT",
+    ):
         v = os.environ.get(opt, "").strip()
         if v:
             payload[opt] = v

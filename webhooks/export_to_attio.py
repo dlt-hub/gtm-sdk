@@ -15,6 +15,7 @@ from libs.logging.structured import (
     set_source,
     webhook_request_context,
 )
+from libs.telemetry import init_log_exporter
 from src.attio.export import execute
 from src.secrets_bootstrap import bootstrap_secret, hydrate
 
@@ -65,6 +66,12 @@ APP_NAME: str = WebhookModel.attio_get_app_name()
 # Set the `source` contextvar once per container so every log line emitted
 # from this webhook is filterable by `source=<app-name>` in Modal logs.
 set_source(APP_NAME)
+
+# Initialize the OTLP log exporter so structured events also ship to whatever
+# sink the container's OTEL env vars point at (HyperDX/Datadog/Grafana/etc.).
+# No-op if no OTLP env vars are set — Modal stdout capture stays the
+# always-on transport.
+init_log_exporter(APP_NAME)
 
 image: Image = modal.Image.debian_slim().uv_pip_install(
     "attio>=0.21.2",

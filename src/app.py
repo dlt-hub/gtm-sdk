@@ -4,11 +4,28 @@ from datetime import UTC, datetime
 
 import modal
 
+from libs.logging.structured import set_source
+from libs.telemetry import init_log_exporter
 from src.modal_app import MODAL_APP
 
 # Force deployment with timestamp
 _deploy_ts = time.time()
 app = modal.App(name=MODAL_APP)
+
+# Ship structured log events emitted from ``src/*`` (e.g.
+# ``src/attio/export.py`` and ``src/enrichment.py``) to any OTLP-compatible
+# sink. The OTEL env vars reach the container via
+# ``src.secrets_bootstrap.bootstrap_secret`` (post ai-672), which now folds
+# the OTLP-routing env vars into the inline Modal Secret alongside the
+# Infisical creds. No-op when the OTEL env vars are unset.
+#
+# ``set_source`` binds the per-request lookup key that
+# ``libs.logging.structured.log()`` uses to find the OTLP logger registered
+# by ``init_log_exporter`` — both must agree on ``MODAL_APP`` so the
+# strict-lookup path in ``libs.telemetry.get_otlp_logger`` resolves
+# correctly.
+set_source(MODAL_APP)
+init_log_exporter(MODAL_APP)
 
 
 def _resolve_git_sha() -> str:

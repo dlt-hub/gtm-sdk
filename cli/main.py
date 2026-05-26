@@ -10,7 +10,10 @@ from cli.gmail import app as gmail_app
 from cli.granola import app as granola_app
 from cli.parallel import app as parallel_app
 from cli.webhook import app as webhook_app
-from libs.telemetry import emit_cli_event, init_tracer
+from libs.logging.structured import set_source
+from libs.telemetry import emit_cli_event, init_log_exporter, init_tracer
+
+_CLI_SERVICE_NAME = "elvis-cli"
 
 app = typer.Typer(
     name="gtm",
@@ -46,7 +49,14 @@ app.add_typer(webhook_app, name="webhook")
 
 
 def run():
-    init_tracer()
+    init_tracer(_CLI_SERVICE_NAME)
+    # Bind the `source` contextvar so structured.log() calls in CLI flows
+    # find the right OTLP logger via get_otlp_logger(source). The same
+    # service name is passed to init_log_exporter so the lookup key
+    # matches the registered service. (Strict lookup, no any-logger
+    # fallback — see libs/telemetry.py:get_otlp_logger.)
+    set_source(_CLI_SERVICE_NAME)
+    init_log_exporter(_CLI_SERVICE_NAME)
     try:
         app()
 

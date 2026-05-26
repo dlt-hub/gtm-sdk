@@ -1,20 +1,147 @@
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import signal
+import sys
 from typing import Any
 
 _tracer = None
+# Keyed by ``service_name`` rather than a single global so a process that
+# initializes multiple services (e.g. a future entrypoint that calls
+# ``init_log_exporter("cli")`` and then loads a webhook handler that calls
+# ``init_log_exporter("attio-export")``) doesn't silently attribute the
+# second service's records to the first one's Resource. Today's call sites
+# are siloed (each webhook is a standalone Modal process, the CLI runs
+# alone, ``src/app.py`` runs alone), so this also guards against future
+# entrypoints that cross those boundaries.
+_otlp_loggers: dict[str, Any] = {}
+
+# Tracks whether we've already installed our SIGTERM bridge. We do it lazily
+# (from ``init_log_exporter``) so processes that never wire OTLP don't get
+# their signal handlers touched.
+_sigterm_bridge_installed = False
+
+
+def _install_sigterm_bridge_for_atexit() -> None:
+    """Ensure ``atexit`` handlers fire on SIGTERM (Modal container recycle).
+
+    Python's default SIGTERM handler calls ``os._exit``, which skips
+    ``atexit`` — so the ``provider.shutdown`` we register on the
+    ``LoggerProvider`` never flushes the last batch when Modal recycles a
+    container with SIGTERM. Installing ``sys.exit`` as the SIGTERM handler
+    makes the process raise ``SystemExit`` cleanly, which DOES run
+    ``atexit``.
+
+    Conditional install: if another framework (Modal's own runtime, a test
+    harness, pytest) has already claimed SIGTERM, we leave their handler
+    alone — they presumably have their own graceful-shutdown path that
+    will end up triggering our atexit. We only bridge when SIGTERM is at
+    its Python default.
+    """
+    global _sigterm_bridge_installed  # noqa: PLW0603
+    if _sigterm_bridge_installed:
+        return
+    try:
+        current = signal.getsignal(signal.SIGTERM)
+    except (ValueError, OSError):
+        # signal.getsignal can raise in non-main threads or restricted envs.
+        # Silently skip — atexit will still cover normal exits.
+        return
+    if current != signal.SIG_DFL:
+        return
+    try:
+        signal.signal(
+            signal.SIGTERM,
+            lambda _sig, _frame: sys.exit(0),
+        )
+        _sigterm_bridge_installed = True
+    except (ValueError, OSError):
+        # signal.signal raises if called from a non-main thread. Same
+        # rationale — atexit still runs on normal exits.
+        return
+
+
+def _endpoint_is_hyperdx_url(endpoint: str | None) -> bool:
+    """Detect HyperDX by the resolved URL host, not just by which env var supplied it.
+
+    Operators can legitimately point ``OTEL_EXPORTER_OTLP_ENDPOINT`` at a
+    HyperDX collector and supply ``HYPERDX_API_KEY``; without host-aware
+    detection, the Bearer header wouldn't be injected and HyperDX would
+    reject every batch.
+
+    Match against the parsed hostname, NOT a substring of the full URL —
+    a path like ``https://example.com/proxy/hyperdx.io/forward`` must not
+    be misclassified as HyperDX and have Bearer auth injected.
+    """
+    if not endpoint:
+        return False
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(endpoint)
+    except (ValueError, TypeError):
+        return False
+    host = (parsed.hostname or "").lower()
+    return host == "hyperdx.io" or host.endswith(".hyperdx.io")
+
+
+def _normalize_otlp_endpoint_to_logs(endpoint: str) -> str:
+    """Coerce an OTLP endpoint URL to a logs-signal URL.
+
+    Operator-provided ``OTEL_EXPORTER_OTLP_ENDPOINT`` values fall into three
+    shapes in practice:
+
+    1. A true base URL (``https://host:4318``) — append ``/v1/logs``.
+    2. A full logs URL (``.../v1/logs``) — use as-is.
+    3. A full traces or metrics URL (``.../v1/traces``, ``.../v1/metrics``)
+       — copy-paste mistake from a different signal's docs. Rewrite the
+       suffix to ``/v1/logs`` so the log export still works.
+
+    The SDK only handles case 1 cleanly; the others would produce broken
+    URLs like ``.../v1/traces/v1/logs``.
+    """
+    trimmed = endpoint.rstrip("/")
+    if trimmed.endswith("/v1/logs"):
+        return trimmed
+    for wrong_signal in ("/v1/traces", "/v1/metrics"):
+        if trimmed.endswith(wrong_signal):
+            return trimmed[: -len(wrong_signal)] + "/v1/logs"
+    return f"{trimmed}/v1/logs"
+
+
+def _hyperdx_auth_headers(hyperdx_key: str | None) -> dict[str, str]:
+    """Build the Bearer auth header dict shared by trace and log exporters."""
+    if not hyperdx_key:
+        return {}
+    value = (
+        hyperdx_key
+        if hyperdx_key.lower().startswith("bearer ")
+        else f"Bearer {hyperdx_key}"
+    )
+    return {"authorization": value}
 
 
 def init_tracer(service_name: str = "elvis-cli"):
-    """Initialize OTEL tracer. No-op if neither HYPERDX_API_KEY nor OTEL_EXPORTER_OTLP_ENDPOINT is set."""
+    """Initialize OTEL tracer. No-op if neither HYPERDX_API_KEY nor OTEL_EXPORTER_OTLP_ENDPOINT is set.
+
+    Auth handling mirrors ``init_log_exporter``: the HyperDX Bearer header
+    is only injected when the resolved trace endpoint is HyperDX (came
+    from HyperDX shorthand vars or whose URL points at hyperdx.io). For
+    generic OTEL endpoints (Datadog OTLP intake, Grafana Cloud, custom
+    collectors), no explicit ``headers=`` is passed so the SDK reads
+    ``OTEL_EXPORTER_OTLP_HEADERS`` / ``OTEL_EXPORTER_OTLP_TRACES_HEADERS``
+    per the spec. That keeps a stale ``HYPERDX_API_KEY`` in the env from
+    leaking Bearer auth to a non-HyperDX sink and getting batches rejected.
+    """
     global _tracer  # noqa: PLW0603
 
     hyperdx_key = os.environ.get("HYPERDX_API_KEY")
     otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    hyperdx_endpoint_env = os.environ.get("HYPERDX_OTLP_ENDPOINT")
 
-    if not hyperdx_key and not otel_endpoint:
+    if not hyperdx_key and not otel_endpoint and not hyperdx_endpoint_env:
         return None
 
     from opentelemetry import trace
@@ -31,30 +158,211 @@ def init_tracer(service_name: str = "elvis-cli"):
         },
     )
 
-    endpoint = otel_endpoint
-    if hyperdx_key and not endpoint:
-        endpoint = os.environ.get(
-            "HYPERDX_OTLP_ENDPOINT",
-            "https://in-otel.hyperdx.io/v1/traces",
-        )
+    endpoint: str | None = otel_endpoint
+    endpoint_is_hyperdx = False
+    if not endpoint and (hyperdx_key or hyperdx_endpoint_env):
+        endpoint = hyperdx_endpoint_env or "https://in-otel.hyperdx.io/v1/traces"
+        endpoint_is_hyperdx = True
     if not endpoint:
         return None
 
-    headers: dict[str, str] = {}
-    if hyperdx_key:
-        headers["authorization"] = (
-            hyperdx_key
-            if hyperdx_key.lower().startswith("bearer ")
-            else f"Bearer {hyperdx_key}"
-        )
+    # Same HyperDX detection as init_log_exporter — host-aware so an
+    # operator who points OTEL_EXPORTER_OTLP_ENDPOINT at HyperDX with
+    # HYPERDX_API_KEY still gets Bearer auth.
+    if not endpoint_is_hyperdx and _endpoint_is_hyperdx_url(endpoint):
+        endpoint_is_hyperdx = True
+
+    exporter_kwargs: dict[str, Any] = {"endpoint": endpoint}
+    if endpoint_is_hyperdx:
+        hyperdx_headers = _hyperdx_auth_headers(hyperdx_key)
+        if hyperdx_headers:
+            exporter_kwargs["headers"] = hyperdx_headers
 
     provider = TracerProvider(resource=resource)
     provider.add_span_processor(
-        BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, headers=headers)),
+        BatchSpanProcessor(OTLPSpanExporter(**exporter_kwargs)),
     )
     trace.set_tracer_provider(provider)
     _tracer = trace.get_tracer(service_name)
     return _tracer
+
+
+def init_log_exporter(service_name: str = "elvis-cli"):
+    """Initialize an OTLP log exporter alongside ``libs/logging/structured.log()``.
+
+    Provider-agnostic: any OTLP-compatible HTTP sink (HyperDX, Datadog OTLP
+    intake, Grafana Cloud, a local OTel Collector) works. No-op unless one of
+    ``HYPERDX_API_KEY``, ``HYPERDX_OTLP_ENDPOINT``,
+    ``OTEL_EXPORTER_OTLP_ENDPOINT``, or ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``
+    is set, matching ``init_tracer``'s gate.
+
+    Endpoint resolution prefers per-signal config, then falls back to the
+    shared OTEL base endpoint (with ``/v1/logs`` appended), then to
+    ``HYPERDX_OTLP_ENDPOINT`` (rewritten from ``/v1/traces`` to ``/v1/logs``
+    if needed).
+
+    Auth headers are only forwarded for HyperDX (Bearer ``HYPERDX_API_KEY``).
+    For other sinks that need custom auth, set the standard OTel env vars
+    (``OTEL_EXPORTER_OTLP_HEADERS`` or ``OTEL_EXPORTER_OTLP_LOGS_HEADERS``)
+    — the underlying ``OTLPLogExporter`` reads them automatically when no
+    explicit ``headers=`` is passed, so a Datadog operator can set
+    ``OTEL_EXPORTER_OTLP_LOGS_HEADERS=DD-API-KEY=...`` without changing this
+    code.
+
+    Repeat calls with the **same** ``service_name`` short-circuit so
+    container-import init can't pile up BatchLogRecordProcessor threads.
+    Repeat calls with a **different** ``service_name`` get their own
+    provider, so a process that initializes more than one service attributes
+    each record to the right Resource — emit-site lookup happens via
+    ``get_otlp_logger(service_name)``.
+    """
+    if service_name in _otlp_loggers:
+        return _otlp_loggers[service_name]
+
+    hyperdx_key = os.environ.get("HYPERDX_API_KEY")
+    logs_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
+    otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    hyperdx_endpoint = os.environ.get("HYPERDX_OTLP_ENDPOINT")
+    # OTel header env vars count as a valid "sink is wired" signal — a
+    # headers-only config (e.g. ``OTEL_EXPORTER_OTLP_LOGS_HEADERS=DD-API-KEY=...``
+    # with no explicit endpoint) is a legitimate OTLP setup that relies on
+    # the SDK's default endpoint (``http://localhost:4318/v1/logs`` for the
+    # HTTP exporter). Without this, headers-only configs would silently fall
+    # back to stdout-only logging.
+    otel_headers = os.environ.get("OTEL_EXPORTER_OTLP_HEADERS")
+    otel_logs_headers = os.environ.get("OTEL_EXPORTER_OTLP_LOGS_HEADERS")
+
+    if not (
+        hyperdx_key
+        or logs_endpoint
+        or otel_endpoint
+        or hyperdx_endpoint
+        or otel_headers
+        or otel_logs_headers
+    ):
+        return None
+
+    # Track whether the endpoint resolved from HyperDX shorthand vars or from
+    # a generic OTEL endpoint. The HyperDX Bearer auth header is only valid
+    # against HyperDX endpoints — forwarding it to a Datadog / Grafana /
+    # local-collector URL when an unrelated ``HYPERDX_API_KEY`` is also in
+    # the process env would make those sinks reject every batch. So we only
+    # inject the Bearer header when the endpoint *itself* came from HyperDX
+    # resolution; generic OTEL endpoints get the standard OTLP headers path
+    # (no explicit headers → SDK reads ``OTEL_EXPORTER_OTLP_*_HEADERS``).
+    endpoint: str | None = None
+    endpoint_is_hyperdx = False
+    # Precedence order matters here. Explicit OTel configuration wins
+    # over HyperDX shorthand vars: a headers-only setup
+    # (``OTEL_EXPORTER_OTLP_HEADERS=...``) with a stale ``HYPERDX_API_KEY``
+    # in the env must NOT silently get routed to HyperDX. We only fall
+    # back to the HyperDX collector URL when NO OTel endpoint OR headers
+    # config is present.
+    has_otel_config = bool(
+        logs_endpoint or otel_endpoint or otel_headers or otel_logs_headers,
+    )
+    if logs_endpoint:
+        # Per OTel spec, the per-signal env var is the FULL logs URL — no
+        # path mangling on our side.
+        endpoint = logs_endpoint
+    elif otel_endpoint:
+        # ``OTEL_EXPORTER_OTLP_ENDPOINT`` is the base URL per spec, BUT
+        # operators routinely paste a full traces URL here when copying
+        # from a traces example. If we hand the SDK ``.../v1/traces``, it
+        # blindly appends ``/v1/logs`` and we ship to
+        # ``.../v1/traces/v1/logs`` — broken. Normalize: rewrite a known
+        # traces/metrics signal suffix to ``/v1/logs``, leave an existing
+        # ``/v1/logs`` untouched, and otherwise treat the value as a base
+        # and append the logs path ourselves.
+        endpoint = _normalize_otlp_endpoint_to_logs(otel_endpoint)
+    elif not has_otel_config and (hyperdx_key or hyperdx_endpoint):
+        # HyperDX shorthand fallback. Only reached when the operator has
+        # NOT supplied any OTel-spec endpoint/headers — otherwise we'd
+        # silently override their generic-OTLP intent with a HyperDX URL.
+        base = hyperdx_endpoint or "https://in-otel.hyperdx.io/v1/traces"
+        endpoint = _normalize_otlp_endpoint_to_logs(base)
+        endpoint_is_hyperdx = True
+
+    # Also classify a generic OTel-configured endpoint as HyperDX if its
+    # URL actually points at hyperdx.io — that way an operator who uses
+    # the standard OTel env vars to target HyperDX (e.g.
+    # ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://in-otel.hyperdx.io/v1/logs``
+    # + ``HYPERDX_API_KEY=...``) still gets Bearer auth injected and
+    # HyperDX accepts the batch.
+    if not endpoint_is_hyperdx and _endpoint_is_hyperdx_url(endpoint):
+        endpoint_is_hyperdx = True
+    # If still no endpoint, we don't fail — the SDK has its own default
+    # (``http://localhost:4318/v1/logs``) and the operator may be using a
+    # local collector. Pass ``endpoint=None`` so OTLPLogExporter resolves
+    # it from env vars / default.
+
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.semconv.attributes import service_attributes
+
+    resource = Resource.create(
+        {
+            service_attributes.SERVICE_NAME: service_name,
+            service_attributes.SERVICE_VERSION: "0.1.0",
+        },
+    )
+
+    # Only inject the HyperDX Bearer header when the endpoint is HyperDX —
+    # see the ``endpoint_is_hyperdx`` rationale above. For all other
+    # endpoints (generic OTEL, default-resolved), pass no explicit headers
+    # so the SDK reads ``OTEL_EXPORTER_OTLP_HEADERS`` /
+    # ``OTEL_EXPORTER_OTLP_LOGS_HEADERS`` per the spec.
+    exporter_kwargs: dict[str, Any] = {}
+    if endpoint is not None:
+        exporter_kwargs["endpoint"] = endpoint
+    if endpoint_is_hyperdx:
+        hyperdx_headers = _hyperdx_auth_headers(hyperdx_key)
+        if hyperdx_headers:
+            exporter_kwargs["headers"] = hyperdx_headers
+    exporter = OTLPLogExporter(**exporter_kwargs)
+
+    provider = LoggerProvider(resource=resource)
+    provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
+
+    # ``BatchLogRecordProcessor`` buffers records and exports on a background
+    # thread; without an explicit shutdown the last batch is dropped when a
+    # short-lived CLI run exits or a Modal container is recycled.
+    # ``atexit.register(provider.shutdown)`` covers normal exits and any
+    # ``SystemExit`` path. SIGTERM doesn't run atexit by default, so we
+    # also install a conditional SIGTERM bridge (see
+    # ``_install_sigterm_bridge_for_atexit``) that turns SIGTERM into a
+    # clean ``sys.exit(0)`` so atexit fires on container recycle. SIGKILL
+    # still loses the buffer, but that's outside our reach.
+    atexit.register(provider.shutdown)
+    _install_sigterm_bridge_for_atexit()
+
+    logger = provider.get_logger("structured")
+    _otlp_loggers[service_name] = logger
+    return logger
+
+
+def get_otlp_logger(service_name: str | None = None):
+    """Return the initialized OTLP logger for ``service_name``, or ``None``.
+
+    Called from ``libs/logging/structured.log()`` to decide whether to mirror
+    a stdout line into the OTLP pipeline. Kept as a separate accessor so the
+    log path never has to import OTEL SDK symbols when the sink is disabled.
+
+    Lookup is **strict in both directions**: a ``service_name`` that doesn't
+    match any initialized service returns ``None``, and a ``None`` lookup
+    also returns ``None``. There's no "first-registered" any-logger
+    fallback — that would silently misattribute records to whichever
+    service happened to register first in a process that ran more than
+    one ``init_log_exporter``. Callers are expected to bind the source
+    contextvar (via ``libs.logging.structured.set_source(<APP_NAME>)``)
+    with the same name they pass to ``init_log_exporter(<APP_NAME>)``,
+    so the source contextvar is the per-emit lookup key.
+    """
+    if service_name is None:
+        return None
+    return _otlp_loggers.get(service_name)
 
 
 def emit_cli_event(name: str, attributes: dict[str, Any]) -> None:

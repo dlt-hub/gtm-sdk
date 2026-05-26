@@ -45,9 +45,14 @@ def _make_request(headers: dict[str, str] | None = None) -> Request:
 @pytest.fixture(autouse=True)
 def _isolated_contextvars() -> Any:
     # Pytest runs tests in a single asyncio-free thread, so contextvars set in
-    # one test leak into the next. Snapshot the two we manage and restore.
+    # one test (or at module-import time by something like
+    # ``src/app.py:set_source(MODAL_APP)``) leak into the next. Snapshot and
+    # **clear** at the start so each test sees a clean slate; restore the
+    # snapshot on teardown so we don't disturb anything that ran before.
     prev_request_id = structured._REQUEST_ID.get()
     prev_source = structured._SOURCE.get()
+    structured._REQUEST_ID.set(None)
+    structured._SOURCE.set(None)
     try:
         yield
     finally:
@@ -133,6 +138,79 @@ def test_log_includes_iso8601_timestamp_with_timezone(
     log("test.event")
     [payload] = _read_lines(capsys)
     assert payload["ts"].endswith("+00:00")
+
+
+class _CaptureLogger:
+    """OTLP logger stand-in that records every emit so severity tests can
+    assert on the LogRecord without spinning up a real exporter."""
+
+    def __init__(self) -> None:
+        self.records: list[Any] = []
+
+    def emit(self, record: Any) -> None:
+        self.records.append(record)
+
+
+@pytest.fixture
+def _otlp_capture(monkeypatch: pytest.MonkeyPatch) -> _CaptureLogger:
+    import libs.telemetry as telemetry_module
+
+    capture = _CaptureLogger()
+
+    def _always_return_capture(_name: str | None = None) -> _CaptureLogger:
+        return capture
+
+    monkeypatch.setattr(telemetry_module, "get_otlp_logger", _always_return_capture)
+    return capture
+
+
+@pytest.mark.parametrize(
+    ("event", "expected_severity"),
+    [
+        # Webhook taxonomy (legacy).
+        ("webhook.received", "INFO"),
+        ("webhook.validation_failed", "WARN"),
+        ("webhook.error", "ERROR"),
+        # Generalized suffix patterns — non-webhook emitters get useful
+        # severities without per-event-name maintenance.
+        ("enrichment.failed", "ERROR"),
+        ("attio.handler_exception", "ERROR"),
+        ("apollo.warning", "WARN"),
+        ("enrichment.skipped", "WARN"),
+        # Untagged events default to INFO.
+        ("enrichment.started", "INFO"),
+        ("apollo.lookup_succeeded", "INFO"),
+    ],
+)
+def test_log_otlp_severity_inference_generalizes_beyond_webhooks(
+    event: str,
+    expected_severity: str,
+    _otlp_capture: _CaptureLogger,
+) -> None:
+    """Severity classification is suffix-based so any emitter — webhook
+    handlers, src/attio/export.py, src/enrichment.py, future call sites —
+    gets useful OTLP severities without adding per-event-name special
+    cases. Errors must still alert; warnings must still warn."""
+    set_source("severity-test")
+    set_request_id("req-severity")
+    log(event)
+    assert len(_otlp_capture.records) == 1
+    assert _otlp_capture.records[0].severity_text == expected_severity, (
+        f"event {event!r}: expected {expected_severity}, "
+        f"got {_otlp_capture.records[0].severity_text}"
+    )
+
+
+def test_log_otlp_severity_honors_explicit_status_error_field(
+    _otlp_capture: _CaptureLogger,
+) -> None:
+    """The webhook.completed taxonomy maps to ERROR when ``status='error'``
+    is set as a field; preserve that contract for non-suffix-matched
+    events that still convey failure via a status field."""
+    set_source("severity-status-test")
+    set_request_id("req-status")
+    log("webhook.completed", status="error")
+    assert _otlp_capture.records[0].severity_text == "ERROR"
 
 
 def test_module_export_surface_matches_documented_api() -> None:
