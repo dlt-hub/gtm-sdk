@@ -108,7 +108,7 @@ if TYPE_CHECKING:
         """Concrete type-check stand-in for the ``WebhookModelToReplace``
         placeholder. Mirrors ``WebhookModelProtocol`` with ``...`` bodies so
         pyright sees a fully-implemented base class. Never instantiated at
-        runtime — the ``scripts/deploy-webhook.sh`` sed pass swaps the
+        runtime — the ``scripts/redeploy-webhook.sh`` sed pass swaps the
         placeholder for the concrete ``Webhook`` class before
         ``modal deploy``.
         """

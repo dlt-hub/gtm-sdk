@@ -30,13 +30,13 @@ Rules for working in this repo. `CLAUDE.md` and `WARP.md` symlink here. The repo
 
 `webhooks/export_to_attio.py`, `webhooks/export_to_gcp_etl.py`, and `webhooks/export_to_gcp_raw.py` ship one Modal app per webhook source, but each file uses a `WebhookModelToReplace` placeholder so the working tree stays source-agnostic. **`modal deploy` on the file as-is fails with `NameError: WebhookModelToReplace is not defined`.**
 
-Use `scripts/deploy-webhook.sh <handler> <source>` (or `<handler> --all`) to substitute the placeholder, deploy, and restore in one step. The script auto-discovers valid handlers (any `webhooks/*.py` containing the placeholder) and sources (the `Webhook as <Alias>` imports inside the handler), and preflights per-source GCS buckets when the handler routes to `gs://` (etl, raw). It encodes every footgun in the "Scripted deploy pitfalls" section below.
+Use `scripts/redeploy-webhook.sh <handler> <source>` (or `<handler> --all`) to substitute the placeholder, deploy, and restore in one step. The script auto-discovers valid handlers (any `webhooks/*.py` containing the placeholder) and sources (the `Webhook as <Alias>` imports inside the handler), and preflights per-source GCS buckets when the handler routes to `gs://` (etl, raw). It encodes every footgun in the "Scripted deploy pitfalls" section below.
 
 ```shell
 set -a && source .env.local && set +a   # once per shell
-scripts/deploy-webhook.sh export_to_attio CaldotcomBookingWebhook
-scripts/deploy-webhook.sh export_to_gcp_etl --all
-scripts/deploy-webhook.sh export_to_gcp_raw --all
+scripts/redeploy-webhook.sh export_to_attio CaldotcomBookingWebhook
+scripts/redeploy-webhook.sh export_to_gcp_etl --all
+scripts/redeploy-webhook.sh export_to_gcp_raw --all
 ```
 
 Each source is a separate Modal app, so deploying one source does not redeploy the others — bump them individually after shared-code changes (e.g. `libs/dlt/`) or stale containers will keep importing removed symbols. Do not commit the substituted form; the script's `trap` restores the placeholder even if `modal deploy` fails or the script is interrupted.
@@ -45,15 +45,15 @@ The contract every concrete `src/<source>/webhook/*.py` `Webhook` class must sat
 
 ### Scripted deploy pitfalls
 
-The pitfalls below explain why `scripts/deploy-webhook.sh` is shaped the way it is. The script encodes the answer to each one; keep them here as design rationale for anyone touching the script:
+The pitfalls below explain why `scripts/redeploy-webhook.sh` is shaped the way it is. The script encodes the answer to each one; keep them here as design rationale for anyone touching the script:
 
 - **`unset MODAL_TOKEN_ID MODAL_TOKEN_SECRET` before `infisical run`.** Otherwise the parent shell's personal Modal tokens win over the dlthub-workspace tokens Infisical injects, and deploys land in the wrong workspace.
 - **Wrap with `uv run modal deploy`, not bare `modal deploy`.** Bare `modal` runs outside the project venv and can't import `src.*` packages registered in `pyproject.toml` → `ModuleNotFoundError: No module named 'src.fathom'`.
 - **Use `\cp -f` to bypass `cp -i` aliases.** A `cp` alias to interactive mode will silently answer "no" to the placeholder-restore step, leaving the previous iteration's substitution in place and deploying the wrong source on the next pass.
 - **Do not store `infisical run --token … --` in a shell variable** and then expand it inline (`$INF modal deploy …`). Zsh treats the whole variable as `argv[0]` (`command not found: infisical run …`) and the service token leaks to stderr and shell history. Use a function or a bash array.
 - **Preflight Modal secrets and GCS buckets before the loop.** A missing `modal.Secret.from_name(...)` aborts after the image build; a missing GCS bucket aborts at first write. Check with `infisical run … -- uv run modal secret list` and `gcloud storage ls --project=dlthub-sandbox`.
-- **Wrap the loop in a `trap … EXIT` that restores only the current handler file (and removes its `.bak` sidecar)** so the working tree restores even if the loop dies mid-way. Do *not* glob `tmp/webhook-deploy-bak/*.py webhooks/`: a stale backup from a previous run for a different handler would clobber an unrelated `webhooks/` file, and a `sed -i.bak` sidecar left behind by a signal between the `sed` and the `rm -f *.bak` would survive the restore and leave `webhooks/` dirty. `scripts/deploy-webhook.sh` scopes the restore to `${HANDLER}` and deletes the sidecar inside the same trap.
-- **Serialize concurrent invocations of the deploy helper.** Two terminals can both pass the clean-tree preflight and then race on the same handler file and shared `tmp/webhook-deploy-bak/` state — one process can delete the other's restore source, or one deploy can pick up the other's substitution. `scripts/deploy-webhook.sh` uses an atomic `mkdir tmp/webhook-deploy.lock` as a portable advisory lock and releases it from the EXIT trap.
+- **Wrap the loop in a `trap … EXIT` that restores only the current handler file (and removes its `.bak` sidecar)** so the working tree restores even if the loop dies mid-way. Do *not* glob `tmp/webhook-deploy-bak/*.py webhooks/`: a stale backup from a previous run for a different handler would clobber an unrelated `webhooks/` file, and a `sed -i.bak` sidecar left behind by a signal between the `sed` and the `rm -f *.bak` would survive the restore and leave `webhooks/` dirty. `scripts/redeploy-webhook.sh` scopes the restore to `${HANDLER}` and deletes the sidecar inside the same trap.
+- **Serialize concurrent invocations of the deploy helper.** Two terminals can both pass the clean-tree preflight and then race on the same handler file and shared `tmp/webhook-deploy-bak/` state — one process can delete the other's restore source, or one deploy can pick up the other's substitution. `scripts/redeploy-webhook.sh` uses an atomic `mkdir tmp/webhook-deploy.lock` as a portable advisory lock and releases it from the EXIT trap.
 
 ### Registry
 

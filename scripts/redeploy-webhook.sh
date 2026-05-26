@@ -2,13 +2,13 @@
 # trunk-ignore-all(shellcheck/SC2310): in_array is a pure boolean check; intentional 0/1 return
 # trunk-ignore-all(shellcheck/SC2312): discovery pipelines feed `mapfile < <(...)` where pipe exit codes are intentionally ignored — empty output is handled explicitly downstream
 #
-# scripts/deploy-webhook.sh — substitute, deploy, and restore a webhook
+# scripts/redeploy-webhook.sh — substitute, deploy, and restore a webhook
 # handler in one safe step. Encodes every footgun catalogued in AGENTS.md
 # "Scripted deploy pitfalls" so callers don't have to remember them.
 #
 # Usage:
-#   scripts/deploy-webhook.sh <handler> <source>
-#   scripts/deploy-webhook.sh <handler> --all
+#   scripts/redeploy-webhook.sh <handler> <source>
+#   scripts/redeploy-webhook.sh <handler> --all
 #
 # <handler>: any webhooks/*.py file containing the WebhookModelToReplace
 #            placeholder (e.g. export_to_attio, export_to_gcp_etl,
@@ -67,8 +67,8 @@ VALID_SOURCES=()
 usage() {
   cat >&2 <<EOF
 Usage:
-  scripts/deploy-webhook.sh <handler> <source>
-  scripts/deploy-webhook.sh <handler> --all
+  scripts/redeploy-webhook.sh <handler> <source>
+  scripts/redeploy-webhook.sh <handler> --all
 
   <handler>  : ${VALID_HANDLERS[*]}
   <source>   : any 'Webhook as <Alias>' alias imported by <handler>.py
@@ -210,7 +210,7 @@ unset MODAL_TOKEN_ID MODAL_TOKEN_SECRET
 # restore handler below.
 mkdir -p tmp
 if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
-  fail "Another scripts/deploy-webhook.sh invocation appears to be running (lock dir ${LOCK_DIR} exists). If you are sure it is not, rmdir ${LOCK_DIR} and retry."
+  fail "Another scripts/redeploy-webhook.sh invocation appears to be running (lock dir ${LOCK_DIR} exists). If you are sure it is not, rmdir ${LOCK_DIR} and retry."
 fi
 trap 'restore_current_handler; release_lock' EXIT
 

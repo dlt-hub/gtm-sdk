@@ -52,7 +52,7 @@ Implementation: [`libs/logging/structured.py`](../libs/logging/structured.py).
 
 ## Deploying
 
-Use `scripts/deploy-webhook.sh` — never `modal deploy webhooks/<file>.py`
+Use `scripts/redeploy-webhook.sh` — never `modal deploy webhooks/<file>.py`
 directly. Handler files live in source control with a `WebhookModelToReplace`
 placeholder so the working tree stays source-agnostic; the script substitutes
 the placeholder, deploys, and restores the file in one safe step.
@@ -61,13 +61,13 @@ the placeholder, deploys, and restores the file in one safe step.
 set -a && source .env.local && set +a   # once per shell
 
 # Deploy one source to one handler.
-scripts/deploy-webhook.sh export_to_attio   CaldotcomBookingWebhook
-scripts/deploy-webhook.sh export_to_gcp_etl Rb2bVisitWebhook
+scripts/redeploy-webhook.sh export_to_attio   CaldotcomBookingWebhook
+scripts/redeploy-webhook.sh export_to_gcp_etl Rb2bVisitWebhook
 
 # Deploy every source imported by the handler (one Modal app per source).
-scripts/deploy-webhook.sh export_to_attio   --all
-scripts/deploy-webhook.sh export_to_gcp_etl --all
-scripts/deploy-webhook.sh export_to_gcp_raw --all
+scripts/redeploy-webhook.sh export_to_attio   --all
+scripts/redeploy-webhook.sh export_to_gcp_etl --all
+scripts/redeploy-webhook.sh export_to_gcp_raw --all
 ```
 
 Valid `<handler>` and `<source>` values are discovered at runtime from
@@ -147,7 +147,7 @@ App names are deterministic per handler family: `export_to_attio` uses
 Either way, redeploys are name-stable and the registry usually only needs
 a refresh:
 
-1. Redeploy via `scripts/deploy-webhook.sh` (see [Deploying](#deploying)).
+1. Redeploy via `scripts/redeploy-webhook.sh` (see [Deploying](#deploying)).
 2. Run `gtm webhook sync` to refresh `generated_at`.
 
 If you change the wiring inside Hookdeck (rerouting a source to a different
