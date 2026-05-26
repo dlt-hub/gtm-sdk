@@ -46,7 +46,7 @@ from src.rb2b.webhook.visit import (
 
 if TYPE_CHECKING:
     # Type-check stand-in for the deploy-time placeholder. The
-    # `scripts/redeploy-webhook.sh` sed pass rewrites every occurrence of
+    # `scripts/redeploy_webhook.py` substitution pass rewrites every occurrence of
     # `WebhookModelToReplace` to a concrete `Webhook` class before
     # `modal deploy`. The TYPE_CHECKING block is skipped at runtime, so the
     # rewritten image inherits from the real Pydantic Webhook subclass; for

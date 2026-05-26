@@ -2,7 +2,7 @@
 """Webhook event-sequence tests.
 
 The webhook handler files contain a `WebhookModelToReplace` placeholder that
-`scripts/redeploy-webhook.sh` substitutes at deploy time. To test `_export()`
+`scripts/redeploy_webhook.py` substitutes at deploy time. To test `_export()`
 in-process we run the same substitution against a temporary copy of the
 handler and load it via `importlib`. This mirrors what production sees and
 avoids stubbing out the FastAPI handler shape.

@@ -86,7 +86,7 @@ class WebhookModelProtocol(Protocol):
         Use this for keys reached on only a subset of the handler's event
         types — declaring them in ``required_api_keys()`` would force every
         other event type to fail-fast on a missing/rotated key even when
-        they never touch that API. ``scripts/redeploy-webhook.sh``
+        they never touch that API. ``scripts/redeploy_webhook.py``
         preflights the union of ``required_api_keys()`` and
         ``optional_api_keys()`` so a missing/rotated key surfaces at
         ``modal deploy`` time instead of on the first qualifying Hookdeck
@@ -124,7 +124,7 @@ if TYPE_CHECKING:
         """Concrete type-check stand-in for the ``WebhookModelToReplace``
         placeholder. Mirrors ``WebhookModelProtocol`` with ``...`` bodies so
         pyright sees a fully-implemented base class. Never instantiated at
-        runtime — the ``scripts/redeploy-webhook.sh`` sed pass swaps the
+        runtime — the ``scripts/redeploy_webhook.py`` substitution pass swaps the
         placeholder for the concrete ``Webhook`` class before
         ``modal deploy``.
         """

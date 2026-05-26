@@ -1,8 +1,14 @@
-"""Smoke tests for scripts/redeploy-webhook.sh.
+"""Smoke tests for scripts/redeploy_webhook.py.
 
 Verifies the substitute -> deploy -> restore loop preserves the working tree,
 even when the deploy fails mid-iteration. Stubs modal / infisical / uv / gcloud
 so the test never makes real network calls.
+
+Sets ``DAGGER_DRY_RUN=1`` so the script's deploy step shells out to the host
+stubs instead of spinning up a Dagger engine. The non-dry-run path (which
+runs ``modal deploy`` inside a Dagger container) is covered by manual smoke
+tests — running it in CI would require a Dagger engine and real Modal/GCP
+credentials.
 
 BD: gtm-sdk-43z (epic gtm-sdk-yol). Each test maps to one acceptance criterion.
 """
@@ -14,6 +20,7 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import sys
 import textwrap
 from collections.abc import Iterator
 from pathlib import Path
@@ -21,7 +28,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts" / "redeploy-webhook.sh"
+SCRIPT = REPO_ROOT / "scripts" / "redeploy_webhook.py"
 HANDLER_FILE = REPO_ROOT / "webhooks" / "export_to_attio.py"
 HANDLER_NAME = "export_to_attio"
 SOURCE_NAME = "CaldotcomBookingWebhook"
@@ -46,15 +53,30 @@ def _write_default_stubs(bin_dir: Path) -> None:
         textwrap.dedent(
             """\
             #!/usr/bin/env bash
-            # Inject Modal credentials only if not already set, mirroring the
-            # real-world quirk where parent-shell env vars win — which is
-            # exactly what `unset MODAL_TOKEN_ID MODAL_TOKEN_SECRET` in the
-            # deploy script works around.
-            [[ -z "${MODAL_TOKEN_ID:-}" ]] && export MODAL_TOKEN_ID="infisical-injected-id"
-            [[ -z "${MODAL_TOKEN_SECRET:-}" ]] && export MODAL_TOKEN_SECRET="infisical-injected-secret"
-            while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done
-            shift  # drop the --
-            exec "$@"
+            # Two subcommands need explicit emulation now that the Python
+            # rewrite calls `infisical secrets get` directly (instead of
+            # always going through `infisical run -- printenv`).
+            #
+            # `secrets get <name> ... --plain --silent` echoes a stub value
+            # so _preflight_infisical_keys and _resolve_modal_tokens see a
+            # non-empty stdout and exit 0. The actual value doesn't matter;
+            # only its presence is what the script checks.
+            if [[ "${1:-}" == "secrets" && "${2:-}" == "get" ]]; then
+                echo "stub-${3}-value"
+                exit 0
+            fi
+            # `run … -- <cmd>` injects MODAL_TOKEN_ID/SECRET only if unset,
+            # mirroring the real-world quirk where parent-shell env vars win
+            # — which is what `os.environ.pop(...)` in the deploy script
+            # works around (regression target for test_modal_token_isolation).
+            if [[ "${1:-}" == "run" ]]; then
+                [[ -z "${MODAL_TOKEN_ID:-}" ]] && export MODAL_TOKEN_ID="infisical-injected-id"
+                [[ -z "${MODAL_TOKEN_SECRET:-}" ]] && export MODAL_TOKEN_SECRET="infisical-injected-secret"
+                while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done
+                shift  # drop the --
+                exec "$@"
+            fi
+            exit 0
             """,
         ),
     )
@@ -85,11 +107,23 @@ def _write_default_stubs(bin_dir: Path) -> None:
                 shift 2
                 exec modal "$@"
             fi
-            if [[ "${1:-}" == "run" && "${2:-}" == "python" ]]; then
-                # Defensive: export_to_attio doesn't trigger the bucket
-                # preflight, so this branch is unreachable for the current
-                # test handler. Kept so the stub set works for export_to_gcp_*.
-                echo "stub-bucket-name"
+            # `uv run python -c "<snippet>"` is used by _preflight_infisical_keys
+            # (to print required_api_keys()) and by _preflight_gcs_buckets (to
+            # print Webhook.<prefix>_get_bucket_name()). Detect which by
+            # grepping the snippet; emit a realistic value for each branch so
+            # the script's downstream `infisical secrets get` / `gcloud
+            # storage ls` calls run against something that looks like real
+            # output, not stub-as-magic-string degenerate behavior.
+            if [[ "${1:-}" == "run" && "${2:-}" == "python" && "${3:-}" == "-c" ]]; then
+                snippet="${4:-}"
+                if [[ "${snippet}" == *required_api_keys* ]]; then
+                    echo "ATTIO_API_KEY"
+                    exit 0
+                fi
+                if [[ "${snippet}" == *_get_bucket_name* ]]; then
+                    echo "stub-bucket-name"
+                    exit 0
+                fi
                 exit 0
             fi
             exit 0
@@ -147,7 +181,7 @@ def ensure_handler_restored() -> Iterator[None]:
     original_bytes = HANDLER_FILE.read_bytes()
     LOCK_DIR.parent.mkdir(parents=True, exist_ok=True)
     # Never remove an existing lock — it may belong to a concurrent real
-    # `scripts/redeploy-webhook.sh` invocation, and that lock is the script's
+    # `scripts/redeploy_webhook.py` invocation, and that lock is the script's
     # only serialization guard. Skip rather than racing the live deploy.
     if LOCK_DIR.exists():
         pytest.skip(
@@ -183,10 +217,22 @@ def _run_deploy(
     # script header. Tests pin to "dev" since they stub the modal binary
     # and never reach Infisical.
     env.setdefault("INFISICAL_ENV", "dev")
+    # Force the host-subprocess deploy path so the existing infisical/modal/uv
+    # stubs handle the deploy step. The Dagger path is exercised by manual
+    # smoke tests; bringing a Dagger engine into CI would also drag in real
+    # Modal credentials, which defeats the purpose of these stubs.
+    env.setdefault("DAGGER_DRY_RUN", "1")
     if env_overrides:
         env.update(env_overrides)
+    # Invoke the script with the test's own interpreter rather than
+    # `uv run python …`. The PATH-overriding `uv` stub catches every
+    # `uv run python <anything>` call (it is meant to intercept the script's
+    # *internal* preflight calls to `uv run python -c …`), so going through
+    # `uv` here would short-circuit the entire script before it starts.
+    # ``sys.executable`` points at the venv pytest itself is running under,
+    # so all the script's imports (``dagger``, etc.) resolve normally.
     return subprocess.run(
-        ["bash", str(SCRIPT), *args],
+        [sys.executable, str(SCRIPT), *args],
         env=env,
         cwd=REPO_ROOT,
         capture_output=True,
@@ -197,7 +243,7 @@ def _run_deploy(
 
 
 def test_substitution_and_restore(stub_bin: Path) -> None:
-    """AC1: CI runs redeploy-webhook.sh against stubs; working tree ends clean."""
+    """AC1: CI runs redeploy_webhook.py against stubs; working tree ends clean."""
     original = HANDLER_FILE.read_bytes()
 
     result = _run_deploy(stub_bin)
@@ -209,6 +255,30 @@ def test_substitution_and_restore(stub_bin: Path) -> None:
     assert HANDLER_FILE.read_bytes() == original
     bak = HANDLER_FILE.with_suffix(HANDLER_FILE.suffix + ".bak")
     assert not bak.exists(), "stale .bak sidecar left behind"
+
+
+def test_all_flag_deploys_every_source(stub_bin: Path) -> None:
+    """AC5: ``--all`` iterates every source imported by the handler.
+
+    Regression target: in early drafts argparse parsed ``--all`` as an
+    unknown option, breaking the documented invocation entirely. Each
+    iteration must end with the placeholder restored, so the file must
+    match HEAD bit-for-bit after all five sources deploy.
+    """
+    original = HANDLER_FILE.read_bytes()
+
+    result = _run_deploy(stub_bin, args=(HANDLER_NAME, "--all"))
+
+    assert result.returncode == 0, (
+        f"--all invocation failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert HANDLER_FILE.read_bytes() == original
+    # All five sources imported by export_to_attio.py should each have
+    # produced a "=== Deploying <source> via <handler> ===" header.
+    assert result.stdout.count("=== Deploying ") == 5, (
+        f"Expected 5 per-source deploy headers (one for each Webhook import). "
+        f"Got:\n{result.stdout}"
+    )
 
 
 def test_restore_on_deploy_failure(stub_bin: Path) -> None:
@@ -291,44 +361,27 @@ def test_modal_token_isolation(stub_bin: Path, tmp_path: Path) -> None:
     assert env_record.exists(), "modal deploy stub was never invoked"
     recorded = env_record.read_text().strip()
     assert recorded == "MODAL_TOKEN_ID=infisical-injected-id", (
-        f"Parent shell's MODAL_TOKEN_ID leaked through to modal — the `unset` "
-        f"line in redeploy-webhook.sh is missing or ineffective. Got: {recorded}"
+        f"Parent shell's MODAL_TOKEN_ID leaked through to modal — the "
+        f"`os.environ.pop(...)` call in redeploy_webhook.py is missing or "
+        f"ineffective. Got: {recorded}"
     )
 
 
-def test_backslash_cp_bypasses_alias(tmp_path: Path) -> None:
-    r"""AC4: `\cp -f` bypasses a `cp` alias the way the script relies on.
+def test_shutil_copyfile_overwrites(tmp_path: Path) -> None:
+    """AC4: restore overwrites unconditionally — no alias-bypass game in Python.
 
-    Direct unit test of the bash mechanism. With aliases force-expanded in a
-    non-interactive shell (the worst-case environment), a plain `cp` would
-    hit the rigged alias and fail; `\cp` must fall through to the real
-    binary and copy the file.
+    The bash script needed `\\cp -f` to dodge `cp -i` aliases that would
+    silently refuse the restore. The Python rewrite uses ``shutil.copyfile``,
+    which always overwrites; this test pins that contract so a refactor to a
+    helper that respects ``exist_ok=False`` or similar would fail loudly.
     """
+    import shutil
+
     src = tmp_path / "src.txt"
     src.write_text("ORIGINAL")
     dst = tmp_path / "dst.txt"
     dst.write_text("STALE")
 
-    script = textwrap.dedent(
-        f"""\
-        shopt -s expand_aliases
-        alias cp='echo "alias-blocked" >&2; false'
-        \\cp -f '{src}' '{dst}'
-        """,
-    )
-    result = subprocess.run(
-        ["bash", "-c", script],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
+    shutil.copyfile(src, dst)
 
-    assert result.returncode == 0, (
-        f"`\\cp -f` failed even with alias bypass — "
-        f"the deploy script's restore mechanism would not work:\n"
-        f"stdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-    assert dst.read_text() == "ORIGINAL", (
-        "`\\cp -f` did not overwrite the destination — alias won over backslash"
-    )
+    assert dst.read_text() == "ORIGINAL"
