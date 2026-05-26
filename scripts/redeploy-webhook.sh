@@ -27,10 +27,15 @@
 #      dlthub workspace tokens win over the parent shell's personal tokens.
 #   3. Refuses to start if the working tree under webhooks/ is dirty.
 #   4. Preflights that required Modal secrets exist before any file edit.
-#   5. Backs up the handler to tmp/webhook-deploy-bak/, sed-substitutes
+#   5. Preflights that each Infisical API key declared by every source's
+#      ``Webhook.required_api_keys()`` exists in ``${INFISICAL_ENV}`` —
+#      restores the deploy-time fail-fast that ai-2aw dropped when it moved
+#      ATTIO_API_KEY/CALCOM_API_KEY from named Modal Secrets to request-
+#      time ``libs.infisical.fetch_all``.
+#   6. Backs up the handler to tmp/webhook-deploy-bak/, sed-substitutes
 #      WebhookModelToReplace → <source>, deploys via `infisical run -- uv
 #      run modal deploy`, then restores from the backup.
-#   6. A trap on EXIT runs the restore even if the script dies mid-deploy
+#   7. A trap on EXIT runs the restore even if the script dies mid-deploy
 #      (Ctrl-C, modal failure, etc.) — the working tree always ends clean.
 
 set -euo pipefail
@@ -320,6 +325,57 @@ source_module_for() {
     }
   ' "${handler_file}"
 }
+
+# --- preflight: Infisical API keys -----------------------------------------
+
+# ai-2aw dropped named Modal Secrets in favor of an inline
+# ``modal.Secret.from_dict({INFISICAL_*})`` bootstrap that fetches per-domain
+# API keys (ATTIO_API_KEY, CALCOM_API_KEY, …) from Infisical at request
+# time via ``libs.infisical.fetch_all``. That removed the deploy-time check
+# that the named Modal Secret existed; a typo or missing key in the target
+# ``${INFISICAL_ENV}`` now ships cleanly and fails on the first Hookdeck
+# event — loud at runtime, invisible at deploy time. This block restores
+# the fail-fast: for each source being deployed, collect the names returned
+# by ``Webhook.required_api_keys()`` and verify each exists in
+# ``${INFISICAL_ENV}`` via ``infisical secrets get`` (one call per key so
+# the error names the specific missing secret instead of conflating them).
+declare -a REQUIRED_KEYS=()
+for source in "${SOURCES_TO_DEPLOY[@]}"; do
+  module="$(source_module_for "${HANDLER_FILE}" "${source}")"
+  [[ -n ${module} ]] || fail "Could not resolve module path for ${source} in ${HANDLER_FILE}."
+
+  # Static method on the Webhook subclass — no env / secrets needed.
+  source_keys="$(uv run python -c "from ${module} import Webhook
+for k in Webhook.required_api_keys():
+    print(k)" 2>/dev/null)" ||
+    fail "Could not resolve required_api_keys() for ${source} via ${module}.Webhook."
+
+  while IFS= read -r key; do
+    [[ -n ${key} ]] || continue
+    # De-dup so the operator-facing log lists each key once even on --all.
+    # ``in_array`` returns 1 (failure) on miss; under ``set -e`` that would
+    # exit the script, so guard with an explicit conditional rather than
+    # relying on short-circuit.
+    if [[ ${#REQUIRED_KEYS[@]} -gt 0 ]] && in_array "${key}" "${REQUIRED_KEYS[@]}"; then
+      continue
+    fi
+    REQUIRED_KEYS+=("${key}")
+  done <<<"${source_keys}"
+done
+
+if [[ ${#REQUIRED_KEYS[@]} -gt 0 ]]; then
+  echo "Preflighting Infisical keys in env=${INFISICAL_ENV}: ${REQUIRED_KEYS[*]}"
+  for key in "${REQUIRED_KEYS[@]}"; do
+    if ! infisical secrets get "${key}" \
+      --projectId "${INFISICAL_PROJECT_ID}" \
+      --token "${INFISICAL_TOKEN}" \
+      --env="${INFISICAL_ENV}" \
+      --plain --silent >/dev/null 2>&1; then
+      fail "Missing Infisical secret '${key}' in env=${INFISICAL_ENV}. Set it before deploying (declared by ${HANDLER_FILE} source(s): ${SOURCES_TO_DEPLOY[*]})."
+    fi
+    echo "  ${key} ✓"
+  done
+fi
 
 if [[ -n ${BUCKET_METHOD} ]]; then
   command -v gcloud >/dev/null 2>&1 || fail "gcloud CLI not found — required to preflight GCS buckets for ${HANDLER}."
