@@ -81,7 +81,30 @@ def find_or_create_tracking_event(input: TrackingEventInput) -> ReliabilityEnvel
 
 
 def _ensure_option_vocabulary(input: TrackingEventInput) -> None:
-    """Seed any multiselect option titles the payload references just-in-time."""
+    """Seed select option titles the payload references just-in-time.
+
+    Bootstrap is the primary path for adding options; this defense-in-depth
+    layer means a new ``source``, ``event_type``, ``event_subtype``, or
+    ``tags`` value never silently fails Attio's "option does not exist"
+    validation. Idempotent: ``ensure_select_options`` is a no-op when the
+    option already exists. See ai-ztm.
+    """
+    ensure_select_options(
+        target_object=_OBJECT,
+        attribute_slug="event_type",
+        options=[input.event_type],
+    )
+    if input.event_subtype is not None:
+        ensure_select_options(
+            target_object=_OBJECT,
+            attribute_slug="event_subtype",
+            options=[input.event_subtype],
+        )
+    ensure_select_options(
+        target_object=_OBJECT,
+        attribute_slug="source",
+        options=[input.source],
+    )
     if input.tags:
         ensure_select_options(
             target_object=_OBJECT,

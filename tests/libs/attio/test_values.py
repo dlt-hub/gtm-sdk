@@ -9,6 +9,7 @@ from libs.attio.values import (
     build_optional_person_values,
     format_linkedin,
     format_location,
+    format_location_from_parts,
     normalize_linkedin_url,
 )
 
@@ -207,29 +208,30 @@ def test_build_tracking_event_values_minimum() -> None:
         body_json='{"x":1}',
     )
     vs = build_tracking_event_values(i)
-    # Required slugs always present, matching the live schema's writable surface
+    # Required slugs always present, matching prod's writable surface
     assert vs["external_id"] == [{"value": "rb2b:abc"}]
     assert vs["source"] == [{"option": "rb2b"}]
     assert vs["name"] == [{"value": "https://example.test/p"}]
     assert vs["event_type"] == [{"option": "rb2b_visit"}]
     assert vs["timestamp"] == [{"value": "2026-05-14"}]  # date, not datetime
     assert vs["body"] == [{"value": '{"x":1}'}]
-    # Optional slugs omitted when None
+    # Optional slugs omitted when their input field is None / empty
     assert "event_subtype" not in vs
-    assert "contact" not in vs
-    # Dead slugs that don't exist on the live schema must never be emitted
-    assert "captured_url" not in vs
-    assert "referrer" not in vs
-    assert "city" not in vs
-    assert "state" not in vs
-    assert "zipcode" not in vs
-    assert "tags" not in vs
-    assert "is_repeat_visit" not in vs
     assert "people" not in vs
     assert "company" not in vs
+    assert "captured_url" not in vs
+    assert "referrer" not in vs
+    assert "is_repeat_visit" not in vs
+    assert "tags" not in vs
+    assert "location" not in vs
+    # ``contact`` is a dev-only legacy slug — see build_tracking_event_values
+    assert "contact" not in vs
 
 
-def test_build_tracking_event_values_with_subtype_and_contact() -> None:
+def test_build_tracking_event_values_with_subtype_and_people_ref() -> None:
+    """Prod uses the ``people`` slug, not ``contact`` (dev-only legacy).
+    See the docstring on ``build_tracking_event_values`` for history.
+    """
     from libs.attio.models import TrackingEventInput
     from libs.attio.values import build_tracking_event_values
 
@@ -245,9 +247,10 @@ def test_build_tracking_event_values_with_subtype_and_contact() -> None:
     )
     vs = build_tracking_event_values(i)
     assert vs["event_subtype"] == [{"option": "repeat_visit"}]
-    assert vs["contact"] == [
+    assert vs["people"] == [
         {"target_object": "people", "target_record_id": "pe_1"},
     ]
+    assert "contact" not in vs
 
 
 def test_build_tracking_event_values_truncates_timestamp_to_day() -> None:
@@ -283,3 +286,111 @@ def test_build_tracking_event_values_source_is_select_shape() -> None:
     )
     vs = build_tracking_event_values(i)
     assert vs["source"] == [{"option": "caldotcom"}]
+
+
+def test_format_location_from_parts_full_address() -> None:
+    loc = format_location_from_parts(
+        city="Cape Elizabeth",
+        state="ME",
+        zipcode="04107",
+    )
+    assert loc == {
+        "line_1": None,
+        "line_2": None,
+        "line_3": None,
+        "line_4": None,
+        "locality": "Cape Elizabeth",
+        "region": "ME",
+        "postcode": "04107",
+        "country_code": "US",
+        "latitude": None,
+        "longitude": None,
+    }
+
+
+def test_format_location_from_parts_all_empty_returns_none() -> None:
+    # Empty inputs must not produce a sentinel object — that would still
+    # be a write against Attio and overwrite human-curated data on repeat
+    # visits.
+    assert format_location_from_parts(None, None, None) is None
+    assert format_location_from_parts("", "", "") is None
+    assert format_location_from_parts("  ", "  ", "  ") is None
+
+
+def test_format_location_from_parts_partial_zip_only() -> None:
+    loc = format_location_from_parts(None, None, "04107")
+    assert loc is not None
+    assert loc["postcode"] == "04107"
+    assert loc["locality"] is None
+    assert loc["region"] is None
+
+
+def test_format_location_from_parts_strips_whitespace() -> None:
+    loc = format_location_from_parts("  Brooklyn  ", "  NY  ", "  11201  ")
+    assert loc is not None
+    assert loc["locality"] == "Brooklyn"
+    assert loc["region"] == "NY"
+    assert loc["postcode"] == "11201"
+
+
+def test_format_location_from_parts_custom_country() -> None:
+    loc = format_location_from_parts("Toronto", "ON", "M5V 2T6", country_code="CA")
+    assert loc is not None
+    assert loc["country_code"] == "CA"
+
+
+def test_build_tracking_event_values_full_surface() -> None:
+    """Every prod-schema slug populated end-to-end. Lock in the wire shape
+    so a future schema-drift can't silently break it. See ai-0lv.
+    """
+    from libs.attio.models import TrackingEventInput
+    from libs.attio.values import build_tracking_event_values
+
+    location = format_location_from_parts("Cape Elizabeth", "ME", "04107")
+    i = TrackingEventInput(
+        external_id="rb2b:abc",
+        source="rb2b",
+        name="RB2B Website visit",
+        event_type="rb2b_visit",
+        event_subtype="repeat_visit",
+        event_timestamp=datetime(2026, 5, 26, 3, 30),
+        body_json='{"x":1}',
+        captured_url="https://dlthub.com/blog/openflow",
+        referrer="https://google.com",
+        is_repeat_visit=True,
+        tags=["b2b", "enterprise"],
+        location=location,
+        related_person_record_id="pe_1",
+        related_company_record_id="co_1",
+    )
+    vs = build_tracking_event_values(i)
+    assert vs["captured_url"] == [{"value": "https://dlthub.com/blog/openflow"}]
+    assert vs["referrer"] == [{"value": "https://google.com"}]
+    assert vs["is_repeat_visit"] == [{"value": True}]
+    assert vs["tags"] == [{"option": "b2b"}, {"option": "enterprise"}]
+    assert vs["location"] == [location]
+    assert vs["people"] == [
+        {"target_object": "people", "target_record_id": "pe_1"},
+    ]
+    assert vs["company"] == [
+        {"target_object": "companies", "target_record_id": "co_1"},
+    ]
+
+
+def test_build_tracking_event_values_is_repeat_visit_false_emits() -> None:
+    """Explicit False is meaningful (this visit is NOT a repeat) and must
+    land on the row; only None suppresses the write."""
+    from libs.attio.models import TrackingEventInput
+    from libs.attio.values import build_tracking_event_values
+
+    i = TrackingEventInput(
+        external_id="rb2b:abc",
+        source="rb2b",
+        name="x",
+        event_type="rb2b_visit",
+        event_timestamp=datetime(2026, 5, 14, 9, 0),
+        body_json="{}",
+        is_repeat_visit=False,
+    )
+    vs = build_tracking_event_values(i)
+    assert vs["is_repeat_visit"] == [{"value": False}]

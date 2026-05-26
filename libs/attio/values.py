@@ -163,6 +163,43 @@ def format_location(
     return [location_data]
 
 
+def format_location_from_parts(
+    city: str | None,
+    state: str | None,
+    zipcode: str | None,
+    country_code: str | None = "US",
+) -> dict[str, Any] | None:
+    """Build an Attio ``location`` attribute value from structured parts.
+
+    Returns ``None`` when every locality field is empty — Attio's
+    ``location`` attribute requires at least one populated subfield, and
+    emitting a wholly-null object would still register as a write of the
+    sentinel and overwrite human-curated data on repeat visits.
+
+    Returns the inner dict (not the ``[{...}]`` list shape) because Attio's
+    ``location`` attribute is single-valued — the caller wraps it before
+    sending. This keeps ``location`` symmetric with the structured
+    ``MeetingExternalRef`` rather than the multi-valued select/text wrappers.
+    """
+    city_clean = (city or "").strip() or None
+    state_clean = (state or "").strip() or None
+    zip_clean = (zipcode or "").strip() or None
+    if not (city_clean or state_clean or zip_clean):
+        return None
+    return {
+        "line_1": None,
+        "line_2": None,
+        "line_3": None,
+        "line_4": None,
+        "locality": city_clean,
+        "region": state_clean,
+        "postcode": zip_clean,
+        "country_code": country_code,
+        "latitude": None,
+        "longitude": None,
+    }
+
+
 def format_company_ref(domain: str | None) -> list[dict[str, Any]] | None:
     if not domain:
         return None
@@ -173,6 +210,12 @@ def format_person_record_ref(record_id: str | None) -> list[dict[str, Any]] | No
     if not record_id:
         return None
     return [{"target_object": "people", "target_record_id": record_id}]
+
+
+def format_company_record_ref(record_id: str | None) -> list[dict[str, Any]] | None:
+    if not record_id:
+        return None
+    return [{"target_object": "companies", "target_record_id": record_id}]
 
 
 def format_notes(notes: str | None) -> list[str] | None:
@@ -390,17 +433,37 @@ def build_tracking_event_values(
 ) -> dict[str, list[dict[str, Any]]]:
     """Build the Attio values dict for a tracking_events record write.
 
-    Emits only the slugs that exist on the live workspace schema
-    (``external_id, source, name, event_type, event_subtype, body, contact,
-    timestamp``). The ``timestamp`` attribute is a *date* in Attio, not a
-    datetime, so the event timestamp is truncated to day precision —
-    sub-day ordering survives inside ``body_json`` and in the GCS raw
-    landing. ``contact`` is People-only; ``owner`` is left for human
-    curation. See ai-wq6 for the prior shape that wrote seven dead slugs
-    (``captured_url`` and friends). The ``source`` slug carries the
-    emitter identifier (``rb2b``, ``caldotcom``, ``form``, ...) so Attio
-    views can filter by source without parsing the ``external_id`` prefix
-    — see ai-ztm.
+    Emits the full writable surface of the live prod ``tracking_events``
+    schema. Confirmed on prod 2026-05-26 via
+    ``tmp/inspect_tracking_events_schema.py``:
+
+    - ``external_id`` (text) — idempotency key
+    - ``source`` (select) — emitter identifier (``rb2b``, ``caldotcom``, ...);
+      JIT-seeded in ``find_or_create_tracking_event``. See ai-ztm.
+    - ``name`` (text)
+    - ``event_type`` (select) — JIT-seeded
+    - ``event_subtype`` (select, optional) — JIT-seeded when present
+    - ``timestamp`` (date) — truncated to day precision; sub-day ordering
+      survives inside ``body_json`` and in the GCS raw landing
+    - ``body`` (text) — JSON-stringified raw payload
+    - ``people`` (record-reference, optional) — Person link.
+
+      Plan-02 wrote to a ``contact`` slug instead, which only exists on
+      dev. PR #111 fixed the cal.com lifecycle path to use ``people``; PR
+      ai-0lv (this change) extends the fix to the rb2b path so prod writes
+      stop silently dropping the person link.
+    - ``company`` (record-reference, optional) — Company link, resolved
+      via the dispatcher's ``LookupTable`` from the rb2b ``UpsertCompany``
+      that runs earlier in the same plan
+    - ``captured_url`` (text, optional)
+    - ``referrer`` (text, optional)
+    - ``is_repeat_visit`` (checkbox, optional)
+    - ``tags`` (multi-select, optional) — JIT-seeded
+    - ``location`` (location, optional) — structured locality/region/postcode
+
+    ``owner`` is left for human curation (the cal.com lifecycle writer
+    hardcodes it for meetings, but the rb2b path leaves it unset so
+    Attio's default assignment rules apply).
     """
     values: dict[str, list[dict[str, Any]]] = {
         "external_id": _scalar_value(input.external_id),
@@ -415,5 +478,19 @@ def build_tracking_event_values(
     if input.related_person_record_id is not None:
         person_ref = format_person_record_ref(input.related_person_record_id)
         if person_ref:
-            values["contact"] = person_ref
+            values["people"] = person_ref
+    if input.related_company_record_id is not None:
+        company_ref = format_company_record_ref(input.related_company_record_id)
+        if company_ref:
+            values["company"] = company_ref
+    if input.captured_url:
+        values["captured_url"] = _scalar_value(input.captured_url)
+    if input.referrer:
+        values["referrer"] = _scalar_value(input.referrer)
+    if input.is_repeat_visit is not None:
+        values["is_repeat_visit"] = _scalar_value(input.is_repeat_visit)
+    if input.tags:
+        values["tags"] = _multiselect_values(input.tags)
+    if input.location is not None:
+        values["location"] = [input.location]
     return values

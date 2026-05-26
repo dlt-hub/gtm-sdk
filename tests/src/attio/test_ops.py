@@ -180,20 +180,21 @@ def test_upsert_tracking_event_forbids_extra_fields() -> None:
         UpsertTrackingEvent(**_valid_tracking_event_kwargs(), bogus="x")  # pyright: ignore[reportCallIssue]  # pyrefly: ignore[unexpected-keyword]
 
 
-def test_upsert_tracking_event_forbids_subject_company() -> None:
-    """Live tracking_events schema has no company ref attribute.
-
-    Carrying a CompanyRef through the op would have nowhere to land in
-    Attio — explicitly rejected at the op boundary so the schema mismatch
-    surfaces immediately rather than at the writer.
+def test_upsert_tracking_event_with_subject_company() -> None:
+    """Prod ``tracking_events`` grew a ``company`` record-reference attribute
+    (verified 2026-05-26 via ``tmp/inspect_tracking_events_schema.py``). The
+    op carries the CompanyRef; the dispatcher resolves it via the plan's
+    LookupTable to a record_id; the writer emits the ``company`` slug. See
+    ai-0lv.
     """
     from src.attio.ops import UpsertTrackingEvent
 
-    with pytest.raises(ValidationError):
-        UpsertTrackingEvent(
-            **_valid_tracking_event_kwargs(),
-            subject_company=CompanyRef(domain="example.test"),  # pyright: ignore[reportCallIssue]  # pyrefly: ignore[unexpected-keyword]
-        )
+    op = UpsertTrackingEvent(
+        **_valid_tracking_event_kwargs(),
+        subject_company=CompanyRef(domain="example.test"),
+    )
+    assert op.subject_company is not None
+    assert op.subject_company.domain == "example.test"
 
 
 def test_attio_op_union_discriminates_tracking_event() -> None:

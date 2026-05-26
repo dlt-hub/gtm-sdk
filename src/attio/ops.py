@@ -12,7 +12,7 @@ between ops and lib-side input types lives in the dispatcher.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -179,7 +179,9 @@ class UpsertTrackingEvent(BaseModel):
 
     The dispatcher resolves `subject_person` and `subject_company` via the
     plan's LookupTable; the libs/attio adapter is called with already-resolved
-    record IDs.
+    record IDs. Every field maps to a real attribute on the live prod
+    ``tracking_events`` schema (confirmed 2026-05-26) — see
+    ``libs.attio.values.build_tracking_event_values`` for the crosswalk.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -187,18 +189,20 @@ class UpsertTrackingEvent(BaseModel):
     op_type: Literal["upsert_tracking_event"] = "upsert_tracking_event"
 
     external_id: str
+    source: str
     name: str
     event_type: Literal["rb2b_visit"]
+    event_subtype: str | None = None
     event_timestamp: datetime
     body_json: str
 
-    captured_url: str
+    captured_url: str | None = None
     referrer: str | None = None
     is_repeat_visit: bool | None = None
     tags: list[str] = Field(default_factory=list)
-    city: str | None = None
-    state: str | None = None
-    zipcode: str | None = None
+    # Attio ``location`` attribute shape — build with
+    # ``libs.attio.values.format_location_from_parts``.
+    location: dict[str, Any] | None = None
 
     subject_person: PersonRef | None = None
     subject_company: CompanyRef | None = None

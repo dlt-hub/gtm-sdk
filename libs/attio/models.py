@@ -207,24 +207,33 @@ class TrackingEventInput(BaseModel):
     """Resolved-record-id form of a tracking_events upsert.
 
     The dispatcher converts UpsertTrackingEvent (which carries refs) into
-    this model, replacing refs with resolved Attio record IDs.
+    this model, replacing refs with resolved Attio record IDs. Mirrors the
+    full writable surface of the live prod ``tracking_events`` schema;
+    every field maps to a real attribute on the live object — see
+    ``build_tracking_event_values`` for the slug → field crosswalk.
+
+    ``location`` is the structured Attio ``location`` attribute shape
+    (``{line_1..4, locality, region, postcode, country_code, latitude,
+    longitude}``) — same shape that ``primary_location`` uses on People.
+    Build it with ``libs.attio.values.format_location_from_parts`` from
+    structured city/state/zipcode.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     external_id: str
+    source: str
     name: str
     event_type: str
+    event_subtype: str | None = None
     event_timestamp: datetime
     body_json: str
 
-    captured_url: str
+    captured_url: str | None = None
     referrer: str | None = None
     is_repeat_visit: bool | None = None
     tags: list[str] = Field(default_factory=list)
-    city: str | None = None
-    state: str | None = None
-    zipcode: str | None = None
+    location: dict[str, Any] | None = None
 
     related_person_record_id: str | None = None
     related_company_record_id: str | None = None

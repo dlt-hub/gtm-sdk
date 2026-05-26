@@ -5,13 +5,14 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel
 
-from libs.attio.values import normalize_linkedin_url
+from libs.attio.values import format_location_from_parts, normalize_linkedin_url
 from libs.dlt.bucket_naming import etl_bucket_name, raw_bucket_name
 from libs.rb2b import Webhook as Rb2bWebhook
 from libs.webhook.filter import WebhookFilter, WebhookFilters
 from src.rb2b.utils import (
     event_to_jsonl,
     generate_gcs_filename,
+    split_rb2b_tags,
 )
 
 
@@ -38,14 +39,14 @@ def extract_domain(website: str | None) -> str | None:
 class NoResolvablePersonFilter(WebhookFilter):
     """Match rb2b visits with no identifiable Person.
 
-    The Attio ``tracking_events`` schema only has a Person ref (``contact``)
-    and no Company ref, so a visit with no ``business_email`` lands as a
-    contact-less row invisible on any timeline and findable only by
-    ``external_id``. This filter is consulted per-op inside
-    ``attio_get_operations`` to suppress just the ``UpsertTrackingEvent``
-    emit; ``UpsertCompany`` still runs so company-only visits enrich the
-    Company record. The audit trail for the suppressed row still lives in
-    GCS raw + ETL.
+    Historical rationale (ai-5x9): the live ``tracking_events`` schema
+    only had a Person ref slug, so a no-business-email visit landed as a
+    contact-less row invisible on any timeline. Prod has since grown a
+    ``company`` record-reference (verified 2026-05-26), so company-only
+    visits now land on the Company timeline instead of being invisible —
+    this filter is no longer in ``DEFAULT_FILTERS``. Keep the class
+    available for callers that opt in (e.g. a noisy account that only
+    matters when a Person resolves).
 
     Auto-registers in ``WebhookFilter._registry`` under the ``type`` tag.
     """
@@ -56,11 +57,11 @@ class NoResolvablePersonFilter(WebhookFilter):
         return not bool(getattr(webhook.payload, "business_email", None))
 
 
-DEFAULT_FILTERS: WebhookFilters = WebhookFilters(
-    root=[
-        NoResolvablePersonFilter(name="drop-no-resolvable-person"),
-    ],
-)
+# Empty by default: every valid rb2b visit (Person or Company resolvable)
+# lands a tracking_events row. Subclasses or call sites that want the
+# legacy person-only behavior can install ``NoResolvablePersonFilter``
+# explicitly.
+DEFAULT_FILTERS: WebhookFilters = WebhookFilters(root=[])
 
 
 class Webhook(Rb2bWebhook):
@@ -170,6 +171,7 @@ class Webhook(Rb2bWebhook):
         from datetime import datetime, timezone
 
         from src.attio.ops import (
+            CompanyRef,
             PersonRef,
             UpsertCompany,
             UpsertPerson,
@@ -214,26 +216,27 @@ class Webhook(Rb2bWebhook):
                 ),
             )
 
-        # tracking_events is Person-only in Attio (no Company ref), so skip
-        # the row when no Person can be resolved — otherwise it lands as a
-        # contact-less row invisible on any timeline and findable only by
-        # external_id. UpsertCompany above still runs so company-only
-        # visits enrich the Company record. The audit trail for the
-        # suppressed tracking event still lives in GCS raw + ETL.
-        #
-        # rb2b-specific fields (captured_url, referrer, tags,
-        # city/state/zipcode, is_repeat_visit) are not part of the live
-        # tracking_events writable schema; they survive inside body_json
-        # for warehouse-side filtering via the GCS raw landing. See
-        # ai-wq6 (schema fix) and ai-5x9 (skip-when-no-person filter).
+        # tracking_events on prod has both a ``people`` and a ``company``
+        # ref attribute, so a company-only visit (no resolvable Person)
+        # still lands a useful row. The Person-only filter
+        # (``NoResolvablePersonFilter``) remains opt-in below — kept as a
+        # short-circuit for noisy anonymous traffic that doesn't move any
+        # account forward, but no longer required by the schema. The
+        # audit trail for the suppressed row still lives in GCS raw + ETL.
         if self._excluded_by_filter() is not None:
             return ops
 
         subject_person = PersonRef(attribute="email", value=email) if email else None
+        subject_company = CompanyRef(domain=domain) if domain else None
         event_subtype = (
             "repeat_visit" if self.payload.is_repeat_visit else "first_visit"
         )
         seen_at = self.payload.seen_at or self.timestamp or datetime.now(timezone.utc)
+        location = format_location_from_parts(
+            city=self.payload.city,
+            state=self.payload.state,
+            zipcode=self.payload.zipcode,
+        )
 
         ops.append(
             UpsertTrackingEvent(
@@ -244,7 +247,13 @@ class Webhook(Rb2bWebhook):
                 event_subtype=event_subtype,
                 event_timestamp=seen_at,
                 body_json=json.dumps(self.model_dump(mode="json")),
+                captured_url=self.payload.captured_url,
+                referrer=self.payload.referrer,
+                is_repeat_visit=self.payload.is_repeat_visit,
+                tags=split_rb2b_tags(self.payload.tags),
+                location=location,
                 subject_person=subject_person,
+                subject_company=subject_company,
             ),
         )
 

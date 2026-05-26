@@ -52,19 +52,22 @@ def test_attio_get_operations_anonymous_visit_is_rejected() -> None:
     assert w.attio_is_valid_webhook() is False
 
 
-def test_attio_get_operations_company_only_emits_company_but_skips_tracking_event() -> (
-    None
-):
-    """Company-only visit still enriches the Company record in Attio, but
-    the tracking_events row is suppressed by NoResolvablePersonFilter —
-    that schema is Person-only (no Company ref) so a contact-less row
-    would be invisible on any timeline. The audit trail still lives in
-    GCS raw + ETL. See ai-5x9.
+def test_attio_get_operations_company_only_emits_company_and_tracking_event() -> None:
+    """Company-only visit (no resolvable Person) lands both an
+    ``UpsertCompany`` and an ``UpsertTrackingEvent`` carrying a
+    ``CompanyRef`` — the prod ``tracking_events`` schema has a
+    ``company`` record-reference attribute, so the row is visible on the
+    Company timeline even without a Person link. See ai-0lv;
+    superseded ai-5x9's Person-only-schema rationale.
     """
     w = _load("rb2b.visit.company_only.redacted.json")
     assert w.attio_is_valid_webhook() is True
     ops = w.attio_get_operations()
-    assert [type(o).__name__ for o in ops] == ["UpsertCompany"]
+    assert [type(o).__name__ for o in ops] == ["UpsertCompany", "UpsertTrackingEvent"]
+    te = ops[1]
+    assert te.subject_company is not None
+    assert te.subject_company.domain == ops[0].domain
+    assert te.subject_person is None
 
 
 def test_attio_get_operations_person_only_emits_two_ops() -> None:
@@ -98,9 +101,9 @@ def test_attio_get_operations_person_and_company_emits_three_ops_in_order() -> N
 
 
 def test_attio_get_operations_tracking_event_preserves_payload_in_body_json() -> None:
-    """rb2b-specific fields (captured_url, referrer, tags, city/state/zipcode,
-    is_repeat_visit) are not part of the live tracking_events schema; they
-    survive via body_json instead. See ai-wq6.
+    """body_json keeps the entire raw payload for warehouse-side filtering
+    even though every prod-schema field is also written to its own slug.
+    Gives downstream consumers a single source of truth.
     """
     w = _load("rb2b.visit.person_and_company.redacted.json")
     te = w.attio_get_operations()[-1]
@@ -113,6 +116,47 @@ def test_attio_get_operations_tracking_event_preserves_payload_in_body_json() ->
     assert payload["state"] == w.payload.state
     assert payload["zipcode"] == w.payload.zipcode
     assert payload["tags"] == w.payload.tags
+
+
+def test_attio_get_operations_tracking_event_populates_prod_schema_fields() -> None:
+    """The UpsertTrackingEvent op now carries every prod-schema field
+    rather than burying them in body_json. See ai-0lv.
+    """
+    from src.rb2b.utils import split_rb2b_tags
+
+    w = _load("rb2b.visit.person_and_company.redacted.json")
+    te = w.attio_get_operations()[-1]
+    assert te.captured_url == w.payload.captured_url
+    assert te.referrer == w.payload.referrer
+    assert te.is_repeat_visit == w.payload.is_repeat_visit
+    assert te.tags == split_rb2b_tags(w.payload.tags)
+    # Location reconstructed from structured parts; only assert the
+    # locality fields rb2b actually delivers.
+    assert te.location is not None
+    assert te.location["locality"] == w.payload.city
+    assert te.location["region"] == w.payload.state
+    assert te.location["postcode"] == w.payload.zipcode
+    # Both refs land when both resolve
+    assert te.subject_person is not None
+    assert te.subject_person.value == w.payload.business_email
+    assert te.subject_company is not None
+    assert te.subject_company.domain  # whatever extract_domain returned
+
+
+def test_attio_get_operations_tracking_event_drops_location_when_payload_empty() -> (
+    None
+):
+    """No city/state/zipcode → no location attribute. Avoids overwriting
+    human-curated CRM data on subsequent visits with empty location."""
+    raw = _load_raw("rb2b.visit.person_and_company.redacted.json")
+    raw["payload"]["City"] = None
+    raw["payload"]["State"] = None
+    raw["payload"]["Zipcode"] = None
+    w = Webhook.model_validate(raw)
+    te = [
+        o for o in w.attio_get_operations() if type(o).__name__ == "UpsertTrackingEvent"
+    ][0]
+    assert te.location is None
 
 
 def test_attio_get_operations_repeat_visit_sets_subtype() -> None:
