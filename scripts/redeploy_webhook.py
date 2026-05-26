@@ -253,6 +253,16 @@ def _preflight_infisical_keys(
     time instead of on the first qualifying Hookdeck event. Each key is
     verified with a separate ``infisical secrets get`` so the error names
     the specific missing secret. (See ai-q9k.)
+
+    Important: ``infisical secrets get`` (CLI 0.43.84 against
+    dlthub-sandbox/dev, confirmed 2026-05-26) exits **0 for both present
+    and missing keys** and only differentiates via stdout — present keys
+    print the value, missing keys print nothing. A pure ``returncode``
+    check is therefore theater: the loop would always pass. We treat
+    empty stdout (after strip) as 'missing' to match the only signal the
+    CLI actually exposes. ``_fetch_infisical_value`` below uses the same
+    pattern for MODAL_TOKEN_*. Do not "simplify" this back to a returncode
+    check. (See ai-4pw.)
     """
     env_slug = os.environ["INFISICAL_ENV"]
     preflight: list[str] = []
@@ -312,7 +322,7 @@ def _preflight_infisical_keys(
             text=True,
             check=False,
         )
-        if proc.returncode != 0:
+        if proc.returncode != 0 or not proc.stdout.strip():
             _fail(
                 f"Missing Infisical secret '{key}' in env={env_slug}. Set it "
                 f"before deploying (declared by {handler_file.name} "

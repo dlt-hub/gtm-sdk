@@ -367,6 +367,59 @@ def test_modal_token_isolation(stub_bin: Path, tmp_path: Path) -> None:
     )
 
 
+def test_preflight_fails_when_infisical_returns_empty_stdout(
+    stub_bin: Path,
+) -> None:
+    """ai-4pw: ``infisical secrets get`` exits 0 even when the key is missing.
+
+    Empirically (CLI 0.43.84, dlthub-sandbox/dev, 2026-05-26) the CLI
+    differentiates present-vs-missing keys only via stdout, not via exit
+    code. A returncode-only preflight is therefore theater — it would
+    always pass.
+
+    Regression target: a refactor that drops the ``not proc.stdout.strip()``
+    side of the check in ``_preflight_infisical_keys`` would silently let
+    a missing/rotated ATTIO_API_KEY ship to Modal and fail on the first
+    Hookdeck event (the exact failure mode ai-ctn/ai-q9k were filed to
+    eliminate).
+    """
+    (stub_bin / "infisical").write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            # Mimic the live CLI bug: `secrets get` exits 0 with empty stdout
+            # when the key is missing, instead of a non-zero return code.
+            if [[ "${1:-}" == "secrets" && "${2:-}" == "get" ]]; then
+                # Print nothing; exit 0. Matches CLI 0.43.84 behavior for
+                # a missing key under --plain --silent.
+                exit 0
+            fi
+            if [[ "${1:-}" == "run" ]]; then
+                [[ -z "${MODAL_TOKEN_ID:-}" ]] && export MODAL_TOKEN_ID="infisical-injected-id"
+                [[ -z "${MODAL_TOKEN_SECRET:-}" ]] && export MODAL_TOKEN_SECRET="infisical-injected-secret"
+                while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done
+                shift
+                exec "$@"
+            fi
+            exit 0
+            """,
+        ),
+    )
+    _make_executable(stub_bin / "infisical")
+
+    result = _run_deploy(stub_bin)
+
+    assert result.returncode != 0, (
+        f"Script should have failed when `infisical secrets get` returns "
+        f"empty stdout. A returncode-only preflight would let this through.\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "ATTIO_API_KEY" in result.stderr, (
+        f"Failure message should name the specific missing key. Got "
+        f"stderr:\n{result.stderr}"
+    )
+
+
 def test_shutil_copyfile_overwrites(tmp_path: Path) -> None:
     """AC4: restore overwrites unconditionally — no alias-bypass game in Python.
 
