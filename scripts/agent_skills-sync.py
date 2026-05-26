@@ -11,7 +11,7 @@ deletes in either source propagate cleanly. Real directories (which
 should not exist) are left alone.
 
 Usage:
-    uv run python scripts/sync-agent-skills.py
+    uv run python scripts/agent_skills-sync.py
 """
 
 from __future__ import annotations
