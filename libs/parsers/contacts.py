@@ -252,8 +252,11 @@ def parse_multiple_email_splitter_and_domain_filter(
         return ""
 
     emails_to_consider: list[str] = filtered_emails
+    # Anchor on "@gmail.com" rather than a substring match so lookalikes such as
+    # "gmail.com.attacker@evil.tld" do not get auto-preferred. CodeQL flags any
+    # `"gmail.com" in e` shape as py/incomplete-url-substring-sanitization.
     gmail_emails: list[str] = [
-        e for e in emails_to_consider if "gmail.com" in e.lower()
+        e for e in emails_to_consider if e.lower().endswith("@gmail.com")
     ]
     return (gmail_emails[0] if gmail_emails else emails_to_consider[0]).lower()
 
