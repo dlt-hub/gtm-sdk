@@ -19,8 +19,6 @@ class _FakeWebhook(BaseModel):
 
 
 class _LessThanFilter(WebhookFilter):
-    # trunk-ignore(pyrefly/bad-override-mutable-attribute): underscore-prefixed
-    # test subclass; the base has no `type` field — pyrefly false-positive.
     type: Literal["_test_less_than"] = "_test_less_than"
     threshold: int
 
@@ -29,7 +27,6 @@ class _LessThanFilter(WebhookFilter):
 
 
 class _EqualsFilter(WebhookFilter):
-    # trunk-ignore(pyrefly/bad-override-mutable-attribute): see above
     type: Literal["_test_equals"] = "_test_equals"
     target: int
 
@@ -39,7 +36,6 @@ class _EqualsFilter(WebhookFilter):
 
 def test_base_should_exclude_raises_for_unimplemented_subclass() -> None:
     class _Unimplemented(WebhookFilter):
-        # trunk-ignore(pyrefly/bad-override-mutable-attribute): see above
         type: Literal["_test_unimplemented"] = "_test_unimplemented"
 
     f = _Unimplemented(name="unimplemented")
