@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 class Assignee(BaseModel):
     email: str | None
-    name: str
+    name: str | None
     team: str | None
 
 
