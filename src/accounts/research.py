@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict
 from src.accounts import tasks
 from src.accounts.models import EnrichResult, ResearchResult
 from src.api_keys import inject_api_keys
-from src.app import app, image, secrets_parallel
+from src.app import app, image
+from src.secrets_bootstrap import bootstrap_secret, with_secrets
 
 
 class ResearchQuery(BaseModel):
@@ -21,7 +22,8 @@ class EnrichQuery(BaseModel):
     objective: str
 
 
-@app.function(image=image, secrets=[secrets_parallel])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("PARALLEL_API_KEY")
 def gtm_research(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -31,7 +33,8 @@ def gtm_research(
         return ResearchResult.model_validate(tasks.research(query.objective))
 
 
-@app.function(image=image, secrets=[secrets_parallel])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("PARALLEL_API_KEY")
 def gtm_enrich(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,

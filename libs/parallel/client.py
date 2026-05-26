@@ -1,6 +1,20 @@
+"""Parallel SDK client builder.
+
+Key resolution order for ``_get_client()``:
+
+1. Explicit ``api_key`` argument (used by tests and one-off CLI scripts).
+2. The contextvar set by :func:`api_key_scope` — webhook and ``src/app.py``
+   call sites open this scope after fetching the key from Infisical.
+3. ``os.environ["PARALLEL_API_KEY"]`` — back-compat fallback for any path
+   that still relies on the legacy named Modal Secret.
+"""
+
 from __future__ import annotations
 
 import os
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from .models import (
     ExtractErrorData,
@@ -19,21 +33,43 @@ from .models import (
 )
 
 
-def _get_client():
+_api_key_var: ContextVar[str | None] = ContextVar(
+    "parallel_api_key",
+    default=None,
+)
+
+
+@contextmanager
+def api_key_scope(api_key: str) -> Generator[None, None, None]:
+    """Bind ``api_key`` as the active Parallel key for this async/sync context.
+
+    Mirrors :func:`libs.attio.client.api_key_scope`. The scope is reset on
+    exit so concurrent Modal inputs in the same container do not see each
+    other's keys.
+    """
+    token = _api_key_var.set(api_key)
+    try:
+        yield
+    finally:
+        _api_key_var.reset(token)
+
+
+def _get_client(api_key: str | None = None):
     # Import here to avoid namespace collision with src/parallel
     import parallel as parallel_sdk
 
-    api_key = os.environ.get("PARALLEL_API_KEY")
-    if api_key is None:
+    token = (
+        api_key or _api_key_var.get() or os.environ.get("PARALLEL_API_KEY", "")
+    ).strip()
+    if not token:
         raise ValueError(
-            "PARALLEL_API_KEY is not present in the environment.",
-        )
-    if api_key == "":
-        raise ValueError(
-            "PARALLEL_API_KEY is present but empty.",
+            "Parallel API key not resolved. Provide one of: "
+            "(1) explicit api_key= argument, "
+            "(2) call inside libs.parallel.client.api_key_scope(...), "
+            "(3) set PARALLEL_API_KEY in the process environment.",
         )
     parallel_client_class = getattr(parallel_sdk, "Parallel")
-    return parallel_client_class(api_key=api_key)
+    return parallel_client_class(api_key=token)
 
 
 def extract_full_content(input: ExtractFullContentInput) -> ExtractResponse:

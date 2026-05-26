@@ -32,6 +32,7 @@ image = (
         "flatsplode>=0.2.0",
         "gcsfs>=2024.10.0",
         "gtm-apollo>=0.0.2",
+        "infisicalsdk>=1.0.16",
         "orjson>=3.10.0",
         "parallel-web",
         "polars>=1.10.0",
@@ -47,14 +48,16 @@ image = (
     .add_local_python_source("src")
 )
 
-# TODO(ai-672): same silent miss-route footgun ai-2aw fixed for
-# `webhooks/export_to_attio.py`. Migrate to the inline `from_dict`
-# bootstrap + `libs.infisical.fetch_all` + per-lib `api_key_scope`
-# pattern. ~17 @app.function sites in src/attio,apollo,parallel touch
-# these — kept out of ai-2aw to scope that PR to the webhook flow.
-secrets_apollo = modal.Secret.from_name("apollo")
-secrets_attio = modal.Secret.from_name("attio")
-secrets_parallel = modal.Secret.from_name("parallel")
+# ai-672: Modal Secrets named `apollo`, `attio`, and `parallel` were replaced by
+# the inline Infisical bootstrap pattern. Each @app.function across
+# src/{attio,apollo,parallel,accounts}/ binds `secrets=[bootstrap_secret()]`
+# (Infisical creds only) and wraps its body in `@with_secrets("<KEY>")` so the
+# real API key is fetched at runtime and bound into
+# `libs.<x>.client.api_key_scope`. This eliminates the silent miss-route footgun
+# where a stale named Modal Secret could shadow an Infisical update. New keys:
+# add `<X>_API_KEY → libs.<x>.client.api_key_scope` to `KEY_SCOPES` in
+# `src/secrets_bootstrap.py`, then decorate functions with
+# `@with_secrets("<X>_API_KEY")`.
 
 
 import src.accounts.accounts as src_gtm_accounts  # noqa: E402

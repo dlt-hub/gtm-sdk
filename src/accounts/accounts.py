@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict
 from src.accounts import tasks
 from src.accounts.models import MapAccountHierarchyResult
 from src.api_keys import inject_api_keys
-from src.app import app, image, secrets_parallel
+from src.app import app, image
+from src.secrets_bootstrap import bootstrap_secret, with_secrets
 
 
 class MapAccountHierarchyQuery(BaseModel):
@@ -15,7 +16,8 @@ class MapAccountHierarchyQuery(BaseModel):
     account: str
 
 
-@app.function(image=image, secrets=[secrets_parallel])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("PARALLEL_API_KEY")
 def gtm_map_account_hierarchy(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,

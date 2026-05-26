@@ -12,11 +12,13 @@ from libs.attio.models import (
     CompanySearchResult,
 )
 from src.api_keys import inject_api_keys
-from src.app import app, image, secrets_attio
+from src.app import app, image
 from src.attio.http_responses import error_response_from_exception
+from src.secrets_bootstrap import bootstrap_secret, with_secrets
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def attio_add_company(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -32,7 +34,8 @@ def attio_add_company(
         )
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def attio_search_companies(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -42,7 +45,8 @@ def attio_search_companies(
         return search_companies(name=query.name, domain=query.domain, limit=query.limit)
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def attio_update_company(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -60,7 +64,8 @@ def attio_update_company(
         )
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def attio_create_companies_attribute(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -123,7 +128,10 @@ class CompanyCreateAttributeQuery(BaseModel):
 # HTTP endpoint wrappers
 
 
-@app.function(image=image, secrets=[secrets_attio])
+# HTTP wrappers only dispatch to inner Modal functions via .remote(); they do
+# not call any lib themselves, so no Infisical bootstrap is needed. The inner
+# attio_* function carries its own bootstrap_secret + @with_secrets binding.
+@app.function(image=image)
 @modal.fastapi_endpoint(method="POST", docs=True)
 def http_attio_company_add(query: CompanyAddQuery) -> Any:
     try:
@@ -137,7 +145,7 @@ def http_attio_company_add(query: CompanyAddQuery) -> Any:
         return error_response_from_exception(exc)
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image)
 @modal.fastapi_endpoint(method="POST", docs=True)
 def http_attio_companies_search(query: CompanySearchQuery) -> Any:
     try:
@@ -151,7 +159,7 @@ def http_attio_companies_search(query: CompanySearchQuery) -> Any:
         return error_response_from_exception(exc)
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image)
 @modal.fastapi_endpoint(method="POST", docs=True)
 def http_attio_company_update(query: CompanyUpdateQuery) -> Any:
     try:

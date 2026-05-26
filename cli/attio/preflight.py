@@ -6,31 +6,61 @@ from typing import Any
 
 import modal
 
+from libs import infisical
 from libs.attio.contracts import WarningEntry
 from libs.attio.errors import (
     ConfigurationError,
     ConnectivityError,
     DeploymentMismatchError,
 )
+from libs.infisical.errors import InfisicalAuthError, InfisicalFetchError
 from src.attio.deployment_parity import ParityStatus, ensure_modal_parity
 from src.modal_app import MODAL_APP
 
-REQUIRED_PEOPLE_SECRETS: tuple[str, ...] = ("attio",)
+# Post-ai-672: the deployed Modal app fetches keys from Infisical at function
+# entry (see src/secrets_bootstrap.py) rather than from a named Modal Secret.
+# Preflight now probes that resolution path directly so an operator catches a
+# missing/empty Infisical key before invoking the remote function.
+REQUIRED_PEOPLE_INFISICAL_KEYS: tuple[str, ...] = ("ATTIO_API_KEY",)
 
 
-def _verify_modal_secrets(names: Iterable[str]) -> None:
+def _verify_infisical_keys(names: Iterable[str]) -> None:
     for name in names:
         try:
-            secret = modal.Secret.from_name(name)
-            secret.hydrate()
-        except modal.exception.NotFoundError as exc:
+            with infisical.fetch(name) as value:
+                if not value:
+                    raise ConfigurationError(
+                        f"Infisical key '{name}' resolved to an empty value.",
+                    )
+        except InfisicalAuthError as exc:
             raise ConfigurationError(
-                f"Modal secret '{name}' not found. "
-                f"Create it with: modal secret create {name}",
+                f"Cannot reach Infisical to verify '{name}': {exc} "
+                "Source .env.local and export INFISICAL_ENV before running this CLI.",
             ) from exc
-        except Exception as exc:
+        except InfisicalFetchError as exc:
+            # Mirror the old `modal.Secret.from_name(...).hydrate()` classification:
+            # config errors (missing secret, expired/wrong token, forbidden
+            # lookup) need operator action; transport errors are retryable.
+            # Pattern-match the wrapped APIError message because the Infisical
+            # SDK collapses all upstream failures into a single
+            # InfisicalFetchError with no structured status code.
+            msg = str(exc).lower()
+            if any(
+                marker in msg
+                for marker in (
+                    "404",
+                    "not found",
+                    "401",
+                    "403",
+                    "unauthorized",
+                    "forbidden",
+                )
+            ):
+                raise ConfigurationError(
+                    f"Infisical key '{name}' missing or inaccessible: {exc}",
+                ) from exc
             raise ConnectivityError(
-                f"Failed to verify Modal secret '{name}': {exc}",
+                f"Transient Infisical failure resolving '{name}': {exc}",
             ) from exc
 
 
@@ -90,7 +120,7 @@ def run_people_preflight(
             )
 
     if connectivity_probe:
-        _verify_modal_secrets(REQUIRED_PEOPLE_SECRETS)
+        _verify_infisical_keys(REQUIRED_PEOPLE_INFISICAL_KEYS)
         try:
             modal.Function.from_name(modal_app, function_name)
         except Exception as exc:

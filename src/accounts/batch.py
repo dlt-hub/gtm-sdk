@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict
 from src.accounts import tasks
 from src.accounts.models import BatchMutationResult
 from src.api_keys import inject_api_keys
-from src.app import app, image, secrets_attio
+from src.app import app, image
+from src.secrets_bootstrap import bootstrap_secret, with_secrets
 
 
 class BatchAddPeopleQuery(BaseModel):
@@ -22,7 +23,8 @@ class BatchAddCompaniesQuery(BaseModel):
     apply: bool = False
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def gtm_batch_add_people(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -34,7 +36,8 @@ def gtm_batch_add_people(
         )
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def gtm_batch_add_companies(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,

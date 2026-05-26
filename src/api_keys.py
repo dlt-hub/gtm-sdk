@@ -7,6 +7,7 @@ from typing import Generator
 _KEY_ENV_MAP: dict[str, str] = {
     "apollo_api_key": "APOLLO_API_KEY",
     "attio_api_key": "ATTIO_API_KEY",
+    "calcom_api_key": "CALCOM_API_KEY",
     "parallel_api_key": "PARALLEL_API_KEY",
     "resend_api_key": "RESEND_API_KEY",
     "granola_api_key": "GRANOLA_API_KEY",

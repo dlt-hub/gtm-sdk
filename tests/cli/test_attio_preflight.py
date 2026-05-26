@@ -1,29 +1,33 @@
 from __future__ import annotations
 
-import pytest
+from contextlib import contextmanager
 
 import modal
+import pytest
 
 from cli.attio.preflight import run_people_preflight
 from libs.attio.errors import ConfigurationError, ConnectivityError
+from libs.infisical.errors import InfisicalAuthError, InfisicalFetchError
 
 
-class _FakeSecret:
-    def __init__(self, hydrate_impl):
-        self.hydrate_impl = hydrate_impl
-
-    def hydrate(self) -> None:
-        self.hydrate_impl()
+@contextmanager
+def _ok_fetch(name: str):
+    yield "ak_test_value"
 
 
-def test_missing_secret_raises_configuration_error(monkeypatch) -> None:
+def test_missing_infisical_key_raises_configuration_error(monkeypatch) -> None:
     monkeypatch.setenv("MODAL_TOKEN_ID", "id_123")
     monkeypatch.setenv("MODAL_TOKEN_SECRET", "secret_123")
 
-    def _secret_not_found(_name: str) -> _FakeSecret:
-        raise modal.exception.NotFoundError("nope")
+    @contextmanager
+    def _explode(name: str):
+        raise InfisicalFetchError(
+            f"Failed to fetch {name} from Infisical: APIError: Secret with name "
+            f"'{name}' not found (Status: 404)",
+        )
+        yield  # unreachable, but makes this a generator
 
-    monkeypatch.setattr(modal.Secret, "from_name", _secret_not_found)
+    monkeypatch.setattr("cli.attio.preflight.infisical.fetch", _explode)
 
     with pytest.raises(ConfigurationError) as exc_info:
         run_people_preflight(
@@ -31,21 +35,41 @@ def test_missing_secret_raises_configuration_error(monkeypatch) -> None:
             function_name="attio_search_people",
         )
 
-    assert "attio" in str(exc_info.value)
-    assert "modal secret create attio" in str(exc_info.value)
+    assert "ATTIO_API_KEY" in str(exc_info.value)
 
 
-def test_transient_hydrate_error_raises_connectivity_error(monkeypatch) -> None:
+def test_unauthorized_infisical_failure_raises_configuration_error(monkeypatch) -> None:
     monkeypatch.setenv("MODAL_TOKEN_ID", "id_123")
     monkeypatch.setenv("MODAL_TOKEN_SECRET", "secret_123")
 
-    def _secret_fails(_name: str) -> _FakeSecret:
-        def _hydrate_fails():
-            raise RuntimeError("grpc transport down")
+    @contextmanager
+    def _unauthorized(name: str):
+        raise InfisicalFetchError(
+            f"Failed to fetch {name} from Infisical: APIError: Unauthorized (Status: 401)",
+        )
+        yield  # unreachable
 
-        return _FakeSecret(_hydrate_fails)
+    monkeypatch.setattr("cli.attio.preflight.infisical.fetch", _unauthorized)
 
-    monkeypatch.setattr(modal.Secret, "from_name", _secret_fails)
+    with pytest.raises(ConfigurationError):
+        run_people_preflight(
+            connectivity_probe=True,
+            function_name="attio_search_people",
+        )
+
+
+def test_transient_infisical_failure_raises_connectivity_error(monkeypatch) -> None:
+    monkeypatch.setenv("MODAL_TOKEN_ID", "id_123")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "secret_123")
+
+    @contextmanager
+    def _flake(name: str):
+        raise InfisicalFetchError(
+            f"Failed to fetch {name} from Infisical: ConnectionError: read timeout",
+        )
+        yield  # unreachable
+
+    monkeypatch.setattr("cli.attio.preflight.infisical.fetch", _flake)
 
     with pytest.raises(ConnectivityError):
         run_people_preflight(
@@ -54,14 +78,31 @@ def test_transient_hydrate_error_raises_connectivity_error(monkeypatch) -> None:
         )
 
 
+def test_infisical_auth_failure_raises_configuration_error(monkeypatch) -> None:
+    monkeypatch.setenv("MODAL_TOKEN_ID", "id_123")
+    monkeypatch.setenv("MODAL_TOKEN_SECRET", "secret_123")
+
+    @contextmanager
+    def _auth_fail(name: str):
+        raise InfisicalAuthError("INFISICAL_TOKEN missing")
+        yield  # unreachable
+
+    monkeypatch.setattr("cli.attio.preflight.infisical.fetch", _auth_fail)
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        run_people_preflight(
+            connectivity_probe=True,
+            function_name="attio_search_people",
+        )
+
+    assert "Infisical" in str(exc_info.value)
+
+
 def test_happy_path(monkeypatch) -> None:
     monkeypatch.setenv("MODAL_TOKEN_ID", "id_123")
     monkeypatch.setenv("MODAL_TOKEN_SECRET", "secret_123")
 
-    def _secret_ok(_name: str) -> _FakeSecret:
-        return _FakeSecret(lambda: None)
-
-    monkeypatch.setattr(modal.Secret, "from_name", _secret_ok)
+    monkeypatch.setattr("cli.attio.preflight.infisical.fetch", _ok_fetch)
 
     def _from_name(_app: str, _fn: str):
         return object()
@@ -81,10 +122,12 @@ def test_happy_path(monkeypatch) -> None:
 def test_token_check_still_wins(monkeypatch) -> None:
     monkeypatch.delenv("MODAL_TOKEN_ID", raising=False)
 
-    def _secret_fails(_name: str) -> _FakeSecret:
-        pytest.fail("should not call hydrate if token is missing")
+    @contextmanager
+    def _should_not_run(name: str):
+        pytest.fail("should not call infisical.fetch if MODAL_TOKEN_ID is missing")
+        yield  # unreachable
 
-    monkeypatch.setattr(modal.Secret, "from_name", _secret_fails)
+    monkeypatch.setattr("cli.attio.preflight.infisical.fetch", _should_not_run)
 
     with pytest.raises(ConfigurationError) as exc_info:
         run_people_preflight(
@@ -95,25 +138,23 @@ def test_token_check_still_wins(monkeypatch) -> None:
     assert "MODAL_TOKEN" in str(exc_info.value)
 
 
-def test_connectivity_probe_false_skips_secret_check(monkeypatch) -> None:
+def test_connectivity_probe_false_skips_infisical_check(monkeypatch) -> None:
     monkeypatch.setenv("MODAL_TOKEN_ID", "id_123")
     monkeypatch.setenv("MODAL_TOKEN_SECRET", "secret_123")
 
-    hydrate_called = {"count": 0}
+    fetched: list[str] = []
 
-    def _secret_fails(_name: str) -> _FakeSecret:
-        def _hydrate():
-            hydrate_called["count"] += 1
-            raise RuntimeError("should not be called")
+    @contextmanager
+    def _record(name: str):
+        fetched.append(name)
+        yield "v"
 
-        return _FakeSecret(_hydrate)
-
-    monkeypatch.setattr(modal.Secret, "from_name", _secret_fails)
+    monkeypatch.setattr("cli.attio.preflight.infisical.fetch", _record)
 
     env_payload, _, _ = run_people_preflight(
         connectivity_probe=False,
         function_name="attio_search_people",
     )
 
-    assert hydrate_called["count"] == 0
+    assert fetched == []
     assert env_payload["MODAL_TOKEN_ID"] == "id_123"

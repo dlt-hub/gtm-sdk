@@ -6,11 +6,13 @@ from pydantic import BaseModel, ConfigDict
 from libs.attio.models import NoteInput, NoteResult
 from libs.attio.notes import add_note, update_note
 from src.api_keys import inject_api_keys
-from src.app import app, image, secrets_attio
+from src.app import app, image
 from src.attio.http_responses import error_response_from_exception
+from src.secrets_bootstrap import bootstrap_secret, with_secrets
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def attio_add_note(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -30,7 +32,8 @@ def attio_add_note(
         )
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def attio_update_note(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -75,7 +78,9 @@ class NoteUpdateQuery(BaseModel):
 # HTTP endpoint wrappers
 
 
-@app.function(image=image, secrets=[secrets_attio])
+# HTTP wrappers only dispatch via .remote(); the inner attio_* function holds
+# the Infisical bootstrap binding. No secret needed on the wrapper itself.
+@app.function(image=image)
 @modal.fastapi_endpoint(method="POST", docs=True)
 def http_attio_note_add(query: NoteAddQuery) -> Any:
     try:
@@ -88,7 +93,7 @@ def http_attio_note_add(query: NoteAddQuery) -> Any:
         return error_response_from_exception(exc)
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image)
 @modal.fastapi_endpoint(method="POST", docs=True)
 def http_attio_note_update(query: NoteUpdateQuery) -> Any:
     try:

@@ -1,6 +1,12 @@
+# pyright: reportPrivateUsage=none
+# Tests intentionally exercise the module-private ``_get_client`` to verify
+# the api_key resolution chain — same pattern as ``test_search_handles_none_excerpts``
+# below, which has lived here since before ai-672.
 from __future__ import annotations
 
 from types import SimpleNamespace
+
+import pytest
 
 from libs.parallel.models import (
     ExtractExcerptsInput,
@@ -70,3 +76,91 @@ def test_search_handles_none_excerpts(monkeypatch) -> None:
 
     parsed = search(SearchInput(objective="acme"))
     assert parsed.results[0].excerpts == []
+
+
+# --- ai-672: api_key arg + api_key_scope context ---
+
+
+class _CapturingFakeParallel:
+    """Light stand-in that records the api_key _get_client passed."""
+
+    last_api_key: str | None = None
+
+    def __init__(self, *, api_key: str, **_kwargs: object) -> None:
+        type(self).last_api_key = api_key
+
+
+@pytest.fixture
+def _fake_sdk(  # pyright: ignore[reportUnusedFunction]  # consumed by tests as a fixture
+    monkeypatch,
+) -> type[_CapturingFakeParallel]:
+    import sys
+    import types
+
+    _CapturingFakeParallel.last_api_key = None
+    fake_module = types.ModuleType("parallel")
+    fake_module.Parallel = _CapturingFakeParallel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "parallel", fake_module)
+    return _CapturingFakeParallel
+
+
+def test_get_client_raises_without_api_key(monkeypatch, _fake_sdk) -> None:
+    monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+    from libs.parallel.client import _get_client
+
+    with pytest.raises(ValueError):
+        _get_client()
+
+
+def test_get_client_uses_env_var(monkeypatch, _fake_sdk) -> None:
+    monkeypatch.setenv("PARALLEL_API_KEY", "from-env")
+    from libs.parallel.client import _get_client
+
+    _get_client()
+    assert _fake_sdk.last_api_key == "from-env"
+
+
+def test_get_client_uses_explicit_api_key_over_everything(
+    monkeypatch,
+    _fake_sdk,
+) -> None:
+    monkeypatch.setenv("PARALLEL_API_KEY", "from-env")
+    from libs.parallel.client import _get_client, api_key_scope
+
+    with api_key_scope("from-scope"):
+        _get_client(api_key="from-arg")
+    assert _fake_sdk.last_api_key == "from-arg"
+
+
+def test_get_client_uses_scope_over_env(monkeypatch, _fake_sdk) -> None:
+    monkeypatch.setenv("PARALLEL_API_KEY", "from-env")
+    from libs.parallel.client import _get_client, api_key_scope
+
+    with api_key_scope("from-scope"):
+        _get_client()
+    assert _fake_sdk.last_api_key == "from-scope"
+
+
+def test_api_key_scope_resets_on_exit(monkeypatch, _fake_sdk) -> None:
+    monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+    from libs.parallel.client import _get_client, api_key_scope
+
+    with api_key_scope("inside"):
+        _get_client()
+        assert _fake_sdk.last_api_key == "inside"
+    with pytest.raises(ValueError):
+        _get_client()
+
+
+def test_api_key_scope_nests(monkeypatch, _fake_sdk) -> None:
+    monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+    from libs.parallel.client import _get_client, api_key_scope
+
+    with api_key_scope("outer"):
+        _get_client()
+        assert _fake_sdk.last_api_key == "outer"
+        with api_key_scope("inner"):
+            _get_client()
+            assert _fake_sdk.last_api_key == "inner"
+        _get_client()
+        assert _fake_sdk.last_api_key == "outer"

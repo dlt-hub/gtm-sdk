@@ -5,7 +5,8 @@ from pydantic import BaseModel, ConfigDict
 from libs.apollo.models import OrgEnrichInput, OrgSearchInput
 from libs.apollo.organizations import enrich_organization, search_organizations
 from src.api_keys import inject_api_keys
-from src.app import app, image, secrets_apollo
+from src.app import app, image
+from src.secrets_bootstrap import bootstrap_secret, with_secrets
 
 
 def _decorate_apollo_key_error(exc: ValueError) -> ValueError:
@@ -13,12 +14,14 @@ def _decorate_apollo_key_error(exc: ValueError) -> ValueError:
     if "APOLLO_API_KEY" not in msg:
         return exc
     return ValueError(
-        f"{msg} Populate Modal secret 'apollo' with APOLLO_API_KEY "
-        "(modal secret create apollo APOLLO_API_KEY=... --force).",
+        f"{msg} Set APOLLO_API_KEY in Infisical (env=dev|staging|prod) — "
+        "the bootstrap pattern fetches it at function entry. See ai-672 / "
+        "src/secrets_bootstrap.py.",
     )
 
 
-@app.function(image=image, secrets=[secrets_apollo])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("APOLLO_API_KEY")
 def apollo_enrich_organization(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -35,7 +38,8 @@ def apollo_enrich_organization(
             raise ValueError(f"{type(exc).__name__}: {exc}") from None
 
 
-@app.function(image=image, secrets=[secrets_apollo])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("APOLLO_API_KEY")
 def apollo_search_organizations(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,

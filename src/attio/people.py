@@ -14,9 +14,10 @@ from libs.attio.people import (
     upsert_person,
 )
 from src.api_keys import inject_api_keys
-from src.app import app, image, secrets_attio
+from src.app import app, image
 from src.attio.http_responses import error_response_from_payload
 from src.modal_app import MODAL_APP
+from src.secrets_bootstrap import bootstrap_secret, with_secrets
 
 ENABLE_ATTIO_PERSON_UPSERT_HTTP = (
     os.environ.get("ENABLE_ATTIO_PERSON_UPSERT_HTTP", "0") == "1"
@@ -35,7 +36,8 @@ def attio_people_runtime_metadata() -> dict[str, object]:
     }
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def attio_add_person(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -66,7 +68,8 @@ def attio_add_person(
             )
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def attio_search_people(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -87,7 +90,8 @@ def attio_search_people(
             return error_envelope(exc)
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def attio_update_person(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -121,7 +125,8 @@ def attio_update_person(
             )
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("ATTIO_API_KEY")
 def attio_upsert_person(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -232,7 +237,9 @@ def _envelope_or_error_response(payload: Any) -> Any:
     return payload
 
 
-@app.function(image=image, secrets=[secrets_attio])
+# HTTP wrappers only dispatch via .remote(); the inner attio_* function holds
+# the Infisical bootstrap binding. No secret needed on the wrapper itself.
+@app.function(image=image)
 @modal.fastapi_endpoint(method="POST", docs=True)
 def http_attio_person_add(query: PersonAddQuery) -> Any:
     result = attio_add_person.remote(
@@ -241,7 +248,7 @@ def http_attio_person_add(query: PersonAddQuery) -> Any:
     return _envelope_or_error_response(_normalize_remote_payload(result))
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image)
 @modal.fastapi_endpoint(method="POST", docs=True)
 def http_attio_people_search(query: PersonSearchQuery) -> Any:
     result = attio_search_people.remote(
@@ -250,7 +257,7 @@ def http_attio_people_search(query: PersonSearchQuery) -> Any:
     return _envelope_or_error_response(_normalize_remote_payload(result))
 
 
-@app.function(image=image, secrets=[secrets_attio])
+@app.function(image=image)
 @modal.fastapi_endpoint(method="POST", docs=True)
 def http_attio_person_update(query: PersonUpdateQuery) -> Any:
     result = attio_update_person.remote(
@@ -261,7 +268,7 @@ def http_attio_person_update(query: PersonUpdateQuery) -> Any:
 
 if ENABLE_ATTIO_PERSON_UPSERT_HTTP:
 
-    @app.function(image=image, secrets=[secrets_attio])
+    @app.function(image=image)
     @modal.fastapi_endpoint(method="POST", docs=True)
     def http_attio_person_upsert(query: PersonUpsertQuery) -> Any:
         result = attio_upsert_person.remote(

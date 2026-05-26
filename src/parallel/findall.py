@@ -12,7 +12,8 @@ from libs.parallel.models import (
 )
 from libs.parallel.types import FindAllGenerator
 from src.api_keys import inject_api_keys
-from src.app import app, image, secrets_parallel
+from src.app import app, image
+from src.secrets_bootstrap import bootstrap_secret, with_secrets
 
 
 def _decorate_parallel_key_error(exc: ValueError) -> ValueError:
@@ -20,12 +21,14 @@ def _decorate_parallel_key_error(exc: ValueError) -> ValueError:
     if "PARALLEL_API_KEY" not in msg:
         return exc
     return ValueError(
-        f"{msg} Populate Modal secret 'parallel' with PARALLEL_API_KEY "
-        "(modal secret create parallel PARALLEL_API_KEY=... --force).",
+        f"{msg} Set PARALLEL_API_KEY in Infisical (env=dev|staging|prod) — "
+        "the bootstrap pattern fetches it at function entry. See ai-672 / "
+        "src/secrets_bootstrap.py.",
     )
 
 
-@app.function(image=image, secrets=[secrets_parallel])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("PARALLEL_API_KEY")
 def parallel_findall_create(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -50,7 +53,8 @@ def parallel_findall_create(
             raise ValueError(f"{type(exc).__name__}: {exc}") from None
 
 
-@app.function(image=image, secrets=[secrets_parallel])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("PARALLEL_API_KEY")
 def parallel_findall_result(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
@@ -67,7 +71,8 @@ def parallel_findall_result(
             raise ValueError(f"{type(exc).__name__}: {exc}") from None
 
 
-@app.function(image=image, secrets=[secrets_parallel])
+@app.function(image=image, secrets=[bootstrap_secret()])
+@with_secrets("PARALLEL_API_KEY")
 def parallel_findall_status(
     payload: dict[str, Any],
     api_keys: dict[str, str] | None = None,
