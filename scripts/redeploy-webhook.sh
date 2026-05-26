@@ -335,20 +335,23 @@ source_module_for() {
 # that the named Modal Secret existed; a typo or missing key in the target
 # ``${INFISICAL_ENV}`` now ships cleanly and fails on the first Hookdeck
 # event — loud at runtime, invisible at deploy time. This block restores
-# the fail-fast: for each source being deployed, collect the names returned
-# by ``Webhook.required_api_keys()`` and verify each exists in
-# ``${INFISICAL_ENV}`` via ``infisical secrets get`` (one call per key so
-# the error names the specific missing secret instead of conflating them).
-declare -a REQUIRED_KEYS=()
+# the fail-fast: for each source being deployed, collect the union of
+# ``Webhook.required_api_keys()`` (keys every event path needs) and
+# ``Webhook.optional_api_keys()`` (keys reached lazily on only a subset of
+# event types — e.g. CALCOM_API_KEY on caldotcom's BOOKING_NO_SHOW_UPDATED
+# branch, ai-q9k) and verify each exists in ``${INFISICAL_ENV}`` via
+# ``infisical secrets get`` (one call per key so the error names the
+# specific missing secret instead of conflating them).
+declare -a PREFLIGHT_KEYS=()
 for source in "${SOURCES_TO_DEPLOY[@]}"; do
   module="$(source_module_for "${HANDLER_FILE}" "${source}")"
   [[ -n ${module} ]] || fail "Could not resolve module path for ${source} in ${HANDLER_FILE}."
 
-  # Static method on the Webhook subclass — no env / secrets needed.
+  # Static methods on the Webhook subclass — no env / secrets needed.
   source_keys="$(uv run python -c "from ${module} import Webhook
-for k in Webhook.required_api_keys():
+for k in list(Webhook.required_api_keys()) + list(Webhook.optional_api_keys()):
     print(k)" 2>/dev/null)" ||
-    fail "Could not resolve required_api_keys() for ${source} via ${module}.Webhook."
+    fail "Could not resolve required_api_keys()/optional_api_keys() for ${source} via ${module}.Webhook."
 
   while IFS= read -r key; do
     [[ -n ${key} ]] || continue
@@ -356,16 +359,16 @@ for k in Webhook.required_api_keys():
     # ``in_array`` returns 1 (failure) on miss; under ``set -e`` that would
     # exit the script, so guard with an explicit conditional rather than
     # relying on short-circuit.
-    if [[ ${#REQUIRED_KEYS[@]} -gt 0 ]] && in_array "${key}" "${REQUIRED_KEYS[@]}"; then
+    if [[ ${#PREFLIGHT_KEYS[@]} -gt 0 ]] && in_array "${key}" "${PREFLIGHT_KEYS[@]}"; then
       continue
     fi
-    REQUIRED_KEYS+=("${key}")
+    PREFLIGHT_KEYS+=("${key}")
   done <<<"${source_keys}"
 done
 
-if [[ ${#REQUIRED_KEYS[@]} -gt 0 ]]; then
-  echo "Preflighting Infisical keys in env=${INFISICAL_ENV}: ${REQUIRED_KEYS[*]}"
-  for key in "${REQUIRED_KEYS[@]}"; do
+if [[ ${#PREFLIGHT_KEYS[@]} -gt 0 ]]; then
+  echo "Preflighting Infisical keys in env=${INFISICAL_ENV}: ${PREFLIGHT_KEYS[*]}"
+  for key in "${PREFLIGHT_KEYS[@]}"; do
     if ! infisical secrets get "${key}" \
       --projectId "${INFISICAL_PROJECT_ID}" \
       --token "${INFISICAL_TOKEN}" \

@@ -551,8 +551,18 @@ class Webhook(CalcomWebhook):
         # Cal.com event types (BOOKING_CREATED/CANCELLED/RESCHEDULED/MEETING_*)
         # to fail when CALCOM_API_KEY is missing or rotated, even though
         # they never reach `_calcom_client()`. ``_calcom_client()`` fetches
-        # the key lazily inside the NO_SHOW branch.
+        # the key lazily inside the NO_SHOW branch. See ``optional_api_keys``
+        # below for the deploy-time preflight that still guards it.
         return ["ATTIO_API_KEY"]
+
+    @staticmethod
+    def optional_api_keys() -> list[str]:
+        # Declared here, not in ``required_api_keys``, so the deploy-time
+        # preflight catches a missing/rotated CALCOM_API_KEY while the
+        # non-NO_SHOW branches stay decoupled from Cal.com key health at
+        # request time. ``_calcom_client()`` still fetches lazily inside
+        # the BOOKING_NO_SHOW_UPDATED branch.
+        return ["CALCOM_API_KEY"]
 
     @staticmethod
     def attio_get_app_name() -> str:

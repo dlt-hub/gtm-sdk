@@ -79,6 +79,22 @@ class WebhookModelProtocol(Protocol):
     def required_api_keys() -> list[str]: ...
 
     @staticmethod
+    def optional_api_keys() -> list[str]:
+        """Names of API keys fetched lazily inside the handler but that
+        should still be preflighted at deploy time.
+
+        Use this for keys reached on only a subset of the handler's event
+        types — declaring them in ``required_api_keys()`` would force every
+        other event type to fail-fast on a missing/rotated key even when
+        they never touch that API. ``scripts/redeploy-webhook.sh``
+        preflights the union of ``required_api_keys()`` and
+        ``optional_api_keys()`` so a missing/rotated key surfaces at
+        ``modal deploy`` time instead of on the first qualifying Hookdeck
+        event.
+        """
+        ...
+
+    @staticmethod
     def attio_get_app_name() -> str: ...
 
     def raw_is_valid_webhook(self) -> bool: ...
@@ -139,6 +155,9 @@ if TYPE_CHECKING:
 
         @staticmethod
         def required_api_keys() -> list[str]: ...
+
+        @staticmethod
+        def optional_api_keys() -> list[str]: ...
 
         @staticmethod
         def attio_get_app_name() -> str: ...

@@ -85,6 +85,10 @@ class Webhook(FathomWebhook):
         return ["ATTIO_API_KEY"]
 
     @staticmethod
+    def optional_api_keys() -> list[str]:
+        return []
+
+    @staticmethod
     def attio_get_app_name() -> str:
         return "export-to-attio-from-fathom-recordings"
 
