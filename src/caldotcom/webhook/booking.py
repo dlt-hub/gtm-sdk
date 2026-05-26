@@ -248,7 +248,7 @@ def _ops_for_cancelled(
     return [
         _lifecycle_event(
             event_type="meeting_cancelled",
-            name="Cal.com booking cancelled",
+            name="CALCOM Booking cancelled",
             timestamp=created_at,
             booking_uid=payload.uid,
             attendee_email=email,
@@ -292,7 +292,7 @@ def _ops_for_rescheduled(
     return [
         _lifecycle_event(
             event_type="meeting_rescheduled",
-            name="Cal.com booking rescheduled",
+            name="CALCOM Booking rescheduled",
             timestamp=created_at,
             booking_uid=payload.uid,
             attendee_email=email,
@@ -346,7 +346,7 @@ def _ops_for_no_show(
     return [
         _lifecycle_event(
             event_type="meeting_no_show",
-            name="Cal.com attendee marked no-show",
+            name="CALCOM Booking attendee no-show",
             timestamp=created_at,
             booking_uid=payload.bookingUid,
             attendee_email=email,
@@ -371,9 +371,9 @@ def _ops_for_meeting_ended(
         "meeting_no_show_host" if payload.noShowHost else "meeting_ended"
     )
     name = (
-        "Cal.com meeting ended — host no-show"
+        "CALCOM Booking ended — host no-show"
         if payload.noShowHost
-        else "Cal.com meeting ended"
+        else "CALCOM Booking ended"
     )
     body = {
         "noShowHost": payload.noShowHost,

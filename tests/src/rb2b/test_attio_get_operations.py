@@ -94,7 +94,7 @@ def test_attio_get_operations_person_and_company_emits_three_ops_in_order() -> N
     assert te.source == "rb2b"
     assert te.event_type == "rb2b_visit"
     assert te.event_subtype in {"first_visit", "repeat_visit"}
-    assert te.name == w.payload.captured_url
+    assert te.name == "RB2B Website visit"
 
 
 def test_attio_get_operations_tracking_event_preserves_payload_in_body_json() -> None:

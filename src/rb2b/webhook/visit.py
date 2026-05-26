@@ -239,7 +239,7 @@ class Webhook(Rb2bWebhook):
             UpsertTrackingEvent(
                 external_id=f"rb2b:{self.event_id}",
                 source="rb2b",
-                name=self.payload.captured_url or "",
+                name="RB2B Website visit",
                 event_type="rb2b_visit",
                 event_subtype=event_subtype,
                 event_timestamp=seen_at,

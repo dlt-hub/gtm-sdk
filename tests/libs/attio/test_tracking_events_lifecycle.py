@@ -20,7 +20,7 @@ from libs.attio.tracking_events import find_or_create_meeting_lifecycle_event
 def _valid_input(**overrides: object) -> MeetingLifecycleEventInput:
     base: dict[str, object] = dict(
         external_id="caldotcom:meeting_cancelled:bk_1:attendee@example.com",
-        name="Cal.com booking cancelled",
+        name="CALCOM Booking cancelled",
         event_type="meeting_cancelled",
         timestamp=datetime(2026, 5, 14, tzinfo=timezone.utc),
         body_json='{"reason":"redacted"}',
