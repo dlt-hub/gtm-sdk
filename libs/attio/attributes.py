@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from attio.errors.sdkerror import SDKError
+from attio.errors.sdkdefaulterror import SDKDefaultError
 
 from libs.attio.client import get_client
 from libs.attio.models import AttributeCreateResult
@@ -28,7 +28,7 @@ def create_attribute(
             existing_attribute_slugs = {
                 getattr(attr, "api_slug", "") for attr in attributes_response.data
             }
-        except SDKError as exc:
+        except SDKDefaultError as exc:
             # Parent object does not exist yet (e.g. preview run before bootstrap).
             # Treat as "no attributes exist" so the script can report would-create
             # instead of crashing.
@@ -109,7 +109,7 @@ def ensure_select_options(
                     attribute=attribute_slug,
                     data={"title": title},
                 )
-            except SDKError as exc:
+            except SDKDefaultError as exc:
                 # Under concurrent webhook deliveries two callers can race past
                 # the pre-read above and both POST the same new option title.
                 # The loser gets 409; treat it as success since the option now

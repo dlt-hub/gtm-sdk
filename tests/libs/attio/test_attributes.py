@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from attio.errors.sdkerror import SDKError
+from attio.errors import SDKDefaultError
 
 from libs.attio.attributes import create_companies_attribute, ensure_select_options
 from libs.attio.models import AttributeCreateResult
@@ -72,15 +72,15 @@ class _FakeAttributes:
         return _resp(SimpleNamespace(title=title))
 
 
-def _make_sdk_error(status_code: int, message: str = "boom") -> SDKError:
-    """Build a SDKError without spinning up a real httpx.Response.
+def _make_sdk_error(status_code: int, message: str = "boom") -> SDKDefaultError:
+    """Build a SDKDefaultError without spinning up a real httpx.Response.
 
-    The real SDKError signature expects an httpx.Response, but its __init__
+    The real SDKDefaultError signature expects an httpx.Response, but its __init__
     only reads .status_code/.headers/.text — a SimpleNamespace is sufficient
     for the duck-typed access pattern in production (`raw_response.status_code`).
     """
     raw_response = SimpleNamespace(status_code=status_code, headers={}, text=message)
-    return SDKError(message, raw_response, message)  # type: ignore[arg-type]
+    return SDKDefaultError(message, raw_response, message)  # type: ignore[arg-type]
 
 
 class _FakeClient:
@@ -187,7 +187,7 @@ def test_ensure_select_options_reraises_non_409_sdkerror(monkeypatch) -> None:
     )
     monkeypatch.setattr("libs.attio.attributes.get_client", lambda: _FakeClient(fake))
 
-    with pytest.raises(SDKError):
+    with pytest.raises(SDKDefaultError):
         ensure_select_options(
             target_object="social_mention",
             attribute_slug="keywords",
