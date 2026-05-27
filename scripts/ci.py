@@ -2,9 +2,14 @@
 
 Mirrors the three workflows under `.github/workflows/`:
 
-  - trunk-check.yml         -> `trunk check --all`
-  - tests-unit.yml          -> `uv run pytest`
-  - tests-integration.yml   -> `uv run pytest -m integration` (needs Infisical creds)
+  - trunk-check.yml         -> `trunk check --all` (defined here; not run in
+                               Dagger upstream)
+  - tests-unit.yml          -> imports `.github/workflows/ci/pytest_dagger.py`
+  - tests-integration.yml   -> imports `.github/workflows/ci/pytest_integration_dagger.py`
+
+The pytest pipelines are imported from the actual workflow scripts so any
+change there propagates here automatically. Trunk lives inline because there
+is no upstream Dagger pipeline for it.
 
 Usage:
 
@@ -12,8 +17,7 @@ Usage:
     dagger run python scripts/ci.py --skip integration
     dagger run python scripts/ci.py --only unit
 
-Junit reports are exported to `junit-unit.xml` and `junit-integration.xml` on
-the host. Integration tests are skipped (not failed) when `INFISICAL_TOKEN` /
+Integration tests are skipped (not failed) when `INFISICAL_TOKEN` /
 `INFISICAL_PROJECT_ID` are absent. Jobs run concurrently; the script exits
 non-zero if any job fails.
 """
@@ -21,45 +25,46 @@ non-zero if any job fails.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import anyio
 import dagger
 from dagger import dag
 
-SOURCE_EXCLUDES = [
-    ".venv",
-    "tmp",
-    ".pytest_cache",
-    ".ruff_cache",
-    "gtm.egg-info",
-    "out",
-    "data",
-    "worktrees",
-]
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKFLOW_CI_DIR = REPO_ROOT / ".github" / "workflows" / "ci"
+TMP_DIR = REPO_ROOT / "tmp"
 
-GIT_INIT_CMD = (
-    "git init -q && "
-    "git -c user.email=ci@example.com -c user.name=ci "
-    "  -c commit.gpgsign=false add -A && "
-    "git -c user.email=ci@example.com -c user.name=ci "
-    "  -c commit.gpgsign=false commit -q -m 'dagger throwaway' --no-verify"
+
+def _load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        msg = f"could not load module from {path}"
+        raise RuntimeError(msg)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+pytest_dagger = _load_module(
+    "pytest_dagger",
+    WORKFLOW_CI_DIR / "pytest_dagger.py",
+)
+pytest_integration_dagger = _load_module(
+    "pytest_integration_dagger",
+    WORKFLOW_CI_DIR / "pytest_integration_dagger.py",
 )
 
-UV_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | sh"
-INFISICAL_INSTALL = (
-    "curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | bash && "
-    "apt-get update && apt-get install -y infisical"
-)
+# Reuse the source-exclude list and git-init shim from the unit pipeline so the
+# trunk container matches what the unit tests see.
+SOURCE_EXCLUDES = pytest_dagger.SOURCE_EXCLUDES
+GIT_INIT_CMD = pytest_dagger.GIT_INIT_CMD
+
 TRUNK_INSTALL = "curl -fsSL https://get.trunk.io | bash -s -- -y"
-
-UNIT_CMD = "uv run pytest --junit-xml=junit.xml -o junit_family=xunit1 || true"
-INTEGRATION_CMD = (
-    'infisical run --projectId "$INFISICAL_PROJECT_ID" --token "$INFISICAL_TOKEN" --env=dev -- '
-    "uv run pytest -m integration --junit-xml=junit.xml -o junit_family=xunit1 || true"
-)
 TRUNK_CMD = "trunk check --all --ci"
 
 
@@ -70,37 +75,37 @@ class JobResult:
     detail: str = ""
 
 
-def _source():
-    return dag.host().directory(".", exclude=SOURCE_EXCLUDES)
+def _dump_exec_error(name: str, exc: dagger.ExecError) -> Path:
+    """Write the failing exec's stdout/stderr to tmp/ci-<name>.log and return the path."""
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = TMP_DIR / f"ci-{name}.log"
+    parts = [
+        f"=== {name} exit code: {exc.exit_code} ===\n",
+        f"\n=== {name} stdout ===\n",
+        exc.stdout or "",
+        f"\n=== {name} stderr ===\n",
+        exc.stderr or "",
+        "\n",
+    ]
+    log_path.write_text("".join(parts))
+    return log_path
 
 
-def _python_base(uv_cache):
-    return (
-        dag.container()
-        .from_("python:3.13")
-        .with_exec(["bash", "-c", UV_INSTALL])
-        .with_env_variable("PATH", "/root/.local/bin:/usr/local/bin:/usr/bin:/bin")
-        .with_mounted_cache("/root/.cache/uv", uv_cache)
-    )
-
-
-async def run_unit(results: list[JobResult], uv_cache) -> None:
+async def run_unit(results: list[JobResult]) -> None:
     try:
-        ctr = (
-            _python_base(uv_cache)
-            .with_directory("/src", _source())
-            .with_workdir("/src")
-            .with_exec(["bash", "-c", f"rm -rf .git && {GIT_INIT_CMD}"])
-            .with_exec(["uv", "sync", "--all-extras", "--dev"])
-            .with_exec(["bash", "-c", UNIT_CMD])
+        ctr = pytest_dagger.build_container()
+        await ctr.sync()
+        results.append(JobResult("unit", ok=True))
+    except dagger.ExecError as exc:
+        log = _dump_exec_error("unit", exc)
+        results.append(
+            JobResult("unit", ok=False, detail=f"exit {exc.exit_code} (log: {log})"),
         )
-        await ctr.file("/src/junit.xml").export("junit-unit.xml")
-        results.append(JobResult("unit", ok=True, detail="junit-unit.xml"))
     except Exception as exc:  # noqa: BLE001
         results.append(JobResult("unit", ok=False, detail=str(exc)))
 
 
-async def run_integration(results: list[JobResult], uv_cache, apt_cache) -> None:
+async def run_integration(results: list[JobResult]) -> None:
     token = os.environ.get("INFISICAL_TOKEN")
     project_id = os.environ.get("INFISICAL_PROJECT_ID")
     if not token or not project_id:
@@ -113,35 +118,39 @@ async def run_integration(results: list[JobResult], uv_cache, apt_cache) -> None
         )
         return
     try:
-        ctr = (
-            _python_base(uv_cache)
-            .with_mounted_cache("/var/cache/apt", apt_cache)
-            .with_exec(["bash", "-c", INFISICAL_INSTALL])
-            .with_secret_variable(
-                "INFISICAL_TOKEN",
-                dag.set_secret("infisical-token", token),
-            )
-            .with_secret_variable(
-                "INFISICAL_PROJECT_ID",
-                dag.set_secret("infisical-project-id", project_id),
-            )
-            .with_directory("/src", _source())
-            .with_workdir("/src")
-            .with_exec(["uv", "sync", "--all-extras", "--dev"])
-            .with_exec(["bash", "-c", INTEGRATION_CMD])
-        )
-        await ctr.file("/src/junit.xml").export("junit-integration.xml")
+        ctr = pytest_integration_dagger.build_container(token, project_id)
+        await ctr.sync()
+        results.append(JobResult("integration", ok=True))
+    except dagger.ExecError as exc:
+        log = _dump_exec_error("integration", exc)
         results.append(
-            JobResult("integration", ok=True, detail="junit-integration.xml"),
+            JobResult(
+                "integration",
+                ok=False,
+                detail=f"exit {exc.exit_code} (log: {log})",
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         results.append(JobResult("integration", ok=False, detail=str(exc)))
 
 
-async def run_trunk(results: list[JobResult], uv_cache, apt_cache) -> None:
+async def run_trunk(
+    results: list[JobResult],
+    apt_cache,
+    uv_cache,
+    trunk_launcher_cache,
+    trunk_user_cache,
+) -> None:
     try:
+        source = dag.host().directory(".", exclude=SOURCE_EXCLUDES)
         ctr = (
-            _python_base(uv_cache)
+            dag.container()
+            .from_("python:3.13")
+            .with_exec(
+                ["bash", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
+            )
+            .with_env_variable("PATH", "/root/.local/bin:/usr/local/bin:/usr/bin:/bin")
+            .with_mounted_cache("/root/.cache/uv", uv_cache)
             .with_mounted_cache("/var/cache/apt", apt_cache)
             .with_exec(
                 [
@@ -150,12 +159,14 @@ async def run_trunk(results: list[JobResult], uv_cache, apt_cache) -> None:
                     "apt-get update && apt-get install -y git curl ca-certificates",
                 ],
             )
+            .with_mounted_cache("/root/.cache/trunk", trunk_user_cache)
+            .with_mounted_cache("/root/.trunk", trunk_launcher_cache)
             .with_exec(["bash", "-c", TRUNK_INSTALL])
             .with_env_variable(
                 "PATH",
                 "/root/.trunk/bin:/root/.local/bin:/usr/local/bin:/usr/bin:/bin",
             )
-            .with_directory("/src", _source())
+            .with_directory("/src", source)
             .with_workdir("/src")
             .with_exec(["bash", "-c", f"rm -rf .git && {GIT_INIT_CMD}"])
             .with_exec(["uv", "sync", "--all-extras", "--dev"])
@@ -164,11 +175,15 @@ async def run_trunk(results: list[JobResult], uv_cache, apt_cache) -> None:
                 "PATH",
                 "/src/.venv/bin:/root/.trunk/bin:/root/.local/bin:/usr/local/bin:/usr/bin:/bin",
             )
-            .with_exec(["bash", "-lc", TRUNK_CMD])
+            .with_exec(["bash", "-c", TRUNK_CMD])
         )
-        # Force evaluation
         await ctr.sync()
         results.append(JobResult("trunk", ok=True))
+    except dagger.ExecError as exc:
+        log = _dump_exec_error("trunk", exc)
+        results.append(
+            JobResult("trunk", ok=False, detail=f"exit {exc.exit_code} (log: {log})"),
+        )
     except Exception as exc:  # noqa: BLE001
         results.append(JobResult("trunk", ok=False, detail=str(exc)))
 
@@ -199,14 +214,23 @@ async def main() -> None:
     async with dagger.connection(config=dagger.Config(log_output=sys.stderr)):
         uv_cache = dag.cache_volume("uv-cache")
         apt_cache = dag.cache_volume("apt-cache")
+        trunk_launcher_cache = dag.cache_volume("trunk-launcher")
+        trunk_user_cache = dag.cache_volume("trunk-user-cache")
 
         async with anyio.create_task_group() as tg:
             if "unit" in jobs:
-                tg.start_soon(run_unit, results, uv_cache)
+                tg.start_soon(run_unit, results)
             if "integration" in jobs:
-                tg.start_soon(run_integration, results, uv_cache, apt_cache)
+                tg.start_soon(run_integration, results)
             if "trunk" in jobs:
-                tg.start_soon(run_trunk, results, uv_cache, apt_cache)
+                tg.start_soon(
+                    run_trunk,
+                    results,
+                    apt_cache,
+                    uv_cache,
+                    trunk_launcher_cache,
+                    trunk_user_cache,
+                )
 
     print("\n=== CI summary ===")
     for r in results:

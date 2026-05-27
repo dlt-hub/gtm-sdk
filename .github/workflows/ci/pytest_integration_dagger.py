@@ -34,6 +34,46 @@ INFISICAL_INSTALL = (
 )
 
 
+SOURCE_EXCLUDES = [
+    ".venv",
+    "tmp",
+    ".pytest_cache",
+    ".ruff_cache",
+    "gtm.egg-info",
+    "out",
+    "data",
+    "worktrees",
+]
+
+
+def build_container(token: str, project_id: str) -> dagger.Container:
+    """Build the integration pytest container. Caller must be inside `dagger.connection(...)`."""
+    source = dag.host().directory(".", exclude=SOURCE_EXCLUDES)
+    uv_cache = dag.cache_volume("uv-cache")
+    apt_cache = dag.cache_volume("apt-cache")
+
+    infisical_token = dag.set_secret("infisical-token", token)
+    infisical_project_id = dag.set_secret("infisical-project-id", project_id)
+
+    return (
+        dag.container()
+        .from_("python:3.13")
+        .with_mounted_cache("/var/cache/apt", apt_cache)
+        .with_exec(["bash", "-c", INFISICAL_INSTALL])
+        .with_exec(
+            ["bash", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
+        )
+        .with_env_variable("PATH", "/root/.local/bin:/usr/local/bin:/usr/bin:/bin")
+        .with_mounted_cache("/root/.cache/uv", uv_cache)
+        .with_secret_variable("INFISICAL_TOKEN", infisical_token)
+        .with_secret_variable("INFISICAL_PROJECT_ID", infisical_project_id)
+        .with_directory("/src", source)
+        .with_workdir("/src")
+        .with_exec(["uv", "sync", "--all-extras", "--dev"])
+        .with_exec(["bash", "-c", PYTEST_CMD])
+    )
+
+
 async def main() -> None:
     token = os.environ.get("INFISICAL_TOKEN")
     project_id = os.environ.get("INFISICAL_PROJECT_ID")
@@ -44,44 +84,7 @@ async def main() -> None:
         sys.exit(1)
 
     async with dagger.connection(config=dagger.Config(log_output=sys.stderr)):
-        source = dag.host().directory(
-            ".",
-            exclude=[
-                ".venv",
-                "tmp",
-                ".pytest_cache",
-                ".ruff_cache",
-                "gtm.egg-info",
-                "out",
-                "data",
-                "worktrees",
-            ],
-        )
-
-        uv_cache = dag.cache_volume("uv-cache")
-        apt_cache = dag.cache_volume("apt-cache")
-
-        infisical_token = dag.set_secret("infisical-token", token)
-        infisical_project_id = dag.set_secret("infisical-project-id", project_id)
-
-        ctr = (
-            dag.container()
-            .from_("python:3.13")
-            .with_mounted_cache("/var/cache/apt", apt_cache)
-            .with_exec(["bash", "-c", INFISICAL_INSTALL])
-            .with_exec(
-                ["bash", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
-            )
-            .with_env_variable("PATH", "/root/.local/bin:/usr/local/bin:/usr/bin:/bin")
-            .with_mounted_cache("/root/.cache/uv", uv_cache)
-            .with_secret_variable("INFISICAL_TOKEN", infisical_token)
-            .with_secret_variable("INFISICAL_PROJECT_ID", infisical_project_id)
-            .with_directory("/src", source)
-            .with_workdir("/src")
-            .with_exec(["uv", "sync", "--all-extras", "--dev"])
-            .with_exec(["bash", "-c", PYTEST_CMD])
-        )
-
+        ctr = build_container(token, project_id)
         await ctr.file("/src/junit.xml").export(JUNIT_HOST_PATH)
         print(f"exported junit report to {JUNIT_HOST_PATH}")
 

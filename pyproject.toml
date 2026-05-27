@@ -36,7 +36,7 @@ dependencies = [
   "phonenumbers>=9.0.29",
   "resend>=2.30.0",
   "uuid7>=0.1.0",
-  "dagger-io>=0.20.8",
+  "dagger-io>=0.21.0",
   "pyyaml>=6.0.3",
   "types-pyyaml>=6.0.12.20260510",
 ]
@@ -56,6 +56,15 @@ addopts = "--import-mode=importlib -m 'not integration'"
 markers = [
   "integration: tests that hit live external APIs (require credentials; run with `-m integration`)",
 ]
+
+[tool.pyright]
+# Explicit venv discovery so pyright resolves third-party types both locally and
+# inside the Dagger CI container (where trunk's sandboxed PATH otherwise picks
+# system python and pyright reports every project import as "could not be
+# resolved from source").
+venvPath = "."
+venv = ".venv"
+pythonPath = ".venv/bin/python"
 
 [tool.uv.sources]
 gtm-linear = { git = "https://github.com/elviskahoro/sdk-python-linear", rev = "6d8f37c09eabec76be41fb5b07727e7972e0bed0" }

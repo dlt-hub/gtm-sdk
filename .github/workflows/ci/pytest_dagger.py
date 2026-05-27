@@ -38,39 +38,42 @@ GIT_INIT_CMD = (
 )
 
 
+SOURCE_EXCLUDES = [
+    ".venv",
+    "tmp",
+    ".pytest_cache",
+    ".ruff_cache",
+    "gtm.egg-info",
+    "out",
+    "data",
+    "worktrees",
+]
+
+
+def build_container() -> dagger.Container:
+    """Build the pytest container. Caller must be inside `dagger.connection(...)`."""
+    source = dag.host().directory(".", exclude=SOURCE_EXCLUDES)
+    uv_cache = dag.cache_volume("uv-cache")
+
+    return (
+        dag.container()
+        .from_("python:3.13")
+        .with_exec(
+            ["bash", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
+        )
+        .with_env_variable("PATH", "/root/.local/bin:/usr/local/bin:/usr/bin:/bin")
+        .with_mounted_cache("/root/.cache/uv", uv_cache)
+        .with_directory("/src", source)
+        .with_workdir("/src")
+        .with_exec(["bash", "-c", f"rm -rf .git && {GIT_INIT_CMD}"])
+        .with_exec(["uv", "sync", "--all-extras", "--dev"])
+        .with_exec(["bash", "-c", PYTEST_CMD])
+    )
+
+
 async def main() -> None:
     async with dagger.connection(config=dagger.Config(log_output=sys.stderr)):
-        source = dag.host().directory(
-            ".",
-            exclude=[
-                ".venv",
-                "tmp",
-                ".pytest_cache",
-                ".ruff_cache",
-                "gtm.egg-info",
-                "out",
-                "data",
-                "worktrees",
-            ],
-        )
-
-        uv_cache = dag.cache_volume("uv-cache")
-
-        ctr = (
-            dag.container()
-            .from_("python:3.13")
-            .with_exec(
-                ["bash", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
-            )
-            .with_env_variable("PATH", "/root/.local/bin:/usr/local/bin:/usr/bin:/bin")
-            .with_mounted_cache("/root/.cache/uv", uv_cache)
-            .with_directory("/src", source)
-            .with_workdir("/src")
-            .with_exec(["bash", "-c", f"rm -rf .git && {GIT_INIT_CMD}"])
-            .with_exec(["uv", "sync", "--all-extras", "--dev"])
-            .with_exec(["bash", "-c", PYTEST_CMD])
-        )
-
+        ctr = build_container()
         await ctr.file("/src/junit.xml").export(JUNIT_HOST_PATH)
         print(f"exported junit report to {JUNIT_HOST_PATH}")
 

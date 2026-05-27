@@ -353,7 +353,7 @@ wheels = [
 
 [[package]]
 name = "dagger-io"
-version = "0.20.8"
+version = "0.21.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -368,10 +368,11 @@ dependencies = [
     { name = "platformdirs" },
     { name = "rich" },
     { name = "typing-extensions" },
+    { name = "yarl" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3e/90/f6f03a75a1b892f1022a7a07e209f364f54bfc2a49a3389b2289fbb80d5e/dagger_io-0.20.8.tar.gz", hash = "sha256:4df07892bba285176d6fb47fb27f53b3e187198f416a0436567024d11336ce49", size = 120623, upload-time = "2026-05-06T22:51:35.741Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b7/9a/374767a1de2591aa077367ed6600270fc413b5990dc48eb4b13ea63cf611/dagger_io-0.21.0.tar.gz", hash = "sha256:e2522d9a9e6bf57bd3292a135666f44c51e6d0d2c8fb04e56d3148e7730dd489", size = 201068, upload-time = "2026-05-26T16:56:29.155Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/ea/a7aedfcf675b920bf3179573fa6c09023dd0ad432d011b22c7a10a5a336b/dagger_io-0.20.8-py3-none-any.whl", hash = "sha256:17b7dfcd804eba489f4250b48bf58c5771cb08a94dcf5881c567614b8df9d470", size = 109434, upload-time = "2026-05-06T22:51:36.783Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/cb/54ab815098ef9d151a3b7ce1e3aae52e038252e7d7775ac93fc51152b474/dagger_io-0.21.0-py3-none-any.whl", hash = "sha256:8a8d66434a3b683c3c0cef04451d535cd38e6b32171f8da8a7fe57d8f468cf01", size = 159552, upload-time = "2026-05-26T16:56:30.14Z" },
 ]
 
 [[package]]
@@ -1023,7 +1024,7 @@ dev = [
 requires-dist = [
     { name = "attio", specifier = ">=0.22.8" },
     { name = "boto3", specifier = ">=1.42.95" },
-    { name = "dagger-io", specifier = ">=0.20.8" },
+    { name = "dagger-io", specifier = ">=0.21.0" },
     { name = "dlt", extras = ["duckdb", "motherduck"], specifier = ">=1.0" },
     { name = "dlthub", specifier = ">=0.27.0" },
     { name = "emoji", specifier = ">=2.15.0" },
