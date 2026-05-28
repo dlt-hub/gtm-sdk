@@ -24,6 +24,7 @@ from libs.attio import people as attio_people
 from libs.attio.models import PersonInput
 from libs.harvest import client as harvest_client
 from libs.logging.structured import log
+from libs.parsers.countries import country_name_to_iso2
 
 
 class HarvestProfile(BaseModel):
@@ -248,17 +249,15 @@ def profile_to_person_input(profile: HarvestProfile, email: str) -> PersonInput:
     if "location" in data:
         loc = data["location"]
         if isinstance(loc, dict):
-            # Build a "city, state" string and leave country out of the
-            # text. Harvest's ``loc.get("country")`` is a free-form name
-            # (e.g. "United States", "India"), not an ISO-3166-1 alpha-2
-            # code — and ``format_location`` requires alpha-2 in
-            # ``PersonInput.country_code`` to write ``primary_location``
-            # (see ai-sfp). Until country-name → ISO-2 normalization is
-            # wired up, primary_location for enrichment-derived people
-            # will be skipped by the downstream writer rather than
-            # written with a wrong default. The locality/region tokens
-            # below are still useful to the search/lookup paths even
-            # when the location dict itself is not persisted.
+            # Build a "city, state" string for the locality/region tokens, and
+            # normalize Harvest's free-form country name to ISO-2 for
+            # country_code. Harvest's ``loc.get("country")`` is a name (e.g.
+            # "United States", "India"), but ``format_location`` requires an
+            # ISO-3166-1 alpha-2 code in ``PersonInput.country_code`` to write
+            # ``primary_location`` (see ai-sfp). Unknown country names normalize
+            # to None, so the downstream writer skips primary_location rather
+            # than stamping a wrong default — the locality/region tokens are
+            # still useful to the search/lookup paths regardless.
             parts: list[str] = []
             if city := loc.get("city"):
                 parts.append(city)
@@ -266,6 +265,8 @@ def profile_to_person_input(profile: HarvestProfile, email: str) -> PersonInput:
                 parts.append(state)
             if parts:
                 person_input.location = ", ".join(parts)
+            if country := loc.get("country"):
+                person_input.country_code = country_name_to_iso2(country)
 
     if "headline" in data and data["headline"]:
         person_input.notes = data["headline"]

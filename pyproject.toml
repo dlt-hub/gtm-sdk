@@ -40,6 +40,7 @@ dependencies = [
   "dagger-io>=0.21.0",
   "pyyaml>=6.0.3",
   "types-pyyaml>=6.0.12.20260510",
+  "pycountry>=24.0.0",
 ]
 
 [project.optional-dependencies]
