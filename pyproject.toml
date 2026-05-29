@@ -30,6 +30,9 @@ dependencies = [
   "opentelemetry-sdk",
   "opentelemetry-exporter-otlp-proto-http",
   "opentelemetry-semantic-conventions",
+  # dlthub -> python-jose -> ecdsa pulls in CVE-2024-23342 (Minerva P-256 timing
+  # attack). No upstream fix exists; the vulnerable ECDSA signing path is unused
+  # here. Dependabot alert #1 dismissed as not_used (ai-h36).
   "dlthub>=0.27.0",
   "logfire>=4.32.1",
   "openai>=2.34.0",
