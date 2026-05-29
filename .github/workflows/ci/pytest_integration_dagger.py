@@ -6,8 +6,15 @@ Invoked the same way locally and in CI:
 
 The pipeline runs the integration test marker inside a python:3.13 container, then
 exports `junit.xml` to the host so a follow-up step (e.g. trunk-io/analytics-uploader)
-can upload it. Test failures do not abort the pipeline so the report always reaches
-the host.
+can upload it.
+
+The pipeline *fails* (non-zero exit) when pytest exits non-zero — a real test
+failure OR the collection-time preflight in tests/integration/conftest.py
+(missing required Attio object) — while still exporting the report. This is the
+whole point of ai-eun: a previous `... || true` swallowed pytest's exit code, so
+the job went green even when zero tests ran. We instead capture pytest's exit
+code into `/src/pytest_rc` (the trailing `echo` keeps the `with_exec` itself
+green so the report stays exportable) and re-raise it after the export.
 
 The integration suite reads its credentials straight from the process environment
 (see `INTEGRATION_SECRET_ENV_VARS`); there is no in-container Infisical CLI bootstrap.
@@ -39,10 +46,21 @@ INTEGRATION_SECRET_ENV_VARS = (
     "PARALLEL_API_KEY",
 )
 
+# The trailing `echo $? > /src/pytest_rc` always exits 0, so the `with_exec`
+# succeeds and `junit.xml` is guaranteed exportable; main() reads pytest_rc back
+# and re-raises the real code. Do NOT restore a `|| true` here (see ai-eun).
 PYTEST_CMD = (
-    "uv run pytest -m integration --junit-xml=junit.xml -o junit_family=xunit1 || true"
+    "uv run pytest -m integration --junit-xml=junit.xml -o junit_family=xunit1; "
+    "echo $? > /src/pytest_rc"
 )
 JUNIT_HOST_PATH = "junit.xml"
+PYTEST_RC_PATH = "/src/pytest_rc"
+
+# Distinct exit code the conftest preflight uses when a required Attio object is
+# missing ("infra not ready"), so a green-checkmark-masking 0-test run is RED but
+# still distinguishable from a genuine regression. Keep in sync with
+# PREFLIGHT_MISSING_OBJECT_RC in tests/integration/conftest.py.
+PREFLIGHT_MISSING_OBJECT_RC = 86
 
 
 SOURCE_EXCLUDES = [
@@ -108,8 +126,44 @@ async def main() -> None:
 
     async with dagger.connection(config=dagger.Config(log_output=sys.stderr)):
         ctr = build_container(secret_env)
-        await ctr.file("/src/junit.xml").export(JUNIT_HOST_PATH)
-        print(f"exported junit report to {JUNIT_HOST_PATH}")
+
+        # Read pytest's real exit code (captured in PYTEST_CMD) first so we know
+        # whether a missing report is an expected consequence of a crashed run or
+        # a genuine problem. Any failure to read or parse it (missing file from a
+        # killed/cancelled container, empty value, non-integer) fails closed at
+        # rc=1 so the job goes red with a controlled message, not a traceback.
+        try:
+            rc = int((await ctr.file(PYTEST_RC_PATH).contents()).strip())
+        except (dagger.DaggerError, ValueError) as exc:
+            sys.stderr.write(
+                f"warning: could not read pytest exit code from {PYTEST_RC_PATH} "
+                f"({exc}); failing closed at rc=1\n",
+            )
+            rc = 1
+
+        # Export the report so it reaches the host (and Trunk). A passing run
+        # MUST produce one, so an export failure there is fatal (re-raise → red).
+        # When pytest already failed, a missing junit.xml is an expected side
+        # effect of the crash — warn and keep the real rc rather than masking it.
+        try:
+            await ctr.file("/src/junit.xml").export(JUNIT_HOST_PATH)
+            print(f"exported junit report to {JUNIT_HOST_PATH}")
+        except dagger.DaggerError as exc:
+            if rc == 0:
+                raise
+            sys.stderr.write(
+                f"warning: could not export {JUNIT_HOST_PATH} "
+                f"(pytest already exited {rc}): {exc}\n",
+            )
+
+    if rc == PREFLIGHT_MISSING_OBJECT_RC:
+        sys.stderr.write(
+            "integration preflight: required Attio object missing — "
+            "see the ::error:: annotation above (ai-eun / ai-0ou)\n",
+        )
+    elif rc != 0:
+        sys.stderr.write(f"integration pytest exited {rc}\n")
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

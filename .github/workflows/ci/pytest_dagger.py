@@ -6,8 +6,13 @@ Invoked the same way locally and in CI:
 
 The pipeline runs `uv run pytest --junit-xml=junit.xml -o junit_family=xunit1`
 inside a python:3.13 container and exports `junit.xml` to the host so a
-follow-up step (e.g. trunk-io/analytics-uploader) can upload it. Test failures
-do not abort the pipeline so the report always reaches the host.
+follow-up step (e.g. trunk-io/analytics-uploader) can upload it.
+
+The pipeline *fails* (non-zero exit) when pytest exits non-zero, while still
+exporting the report. A previous `... || true` swallowed pytest's exit code so
+the job went green even on a failing suite (ai-eun); we instead capture pytest's
+exit code into `/src/pytest_rc` (the trailing `echo` keeps the `with_exec` green
+so the report stays exportable) and re-raise it after the export.
 """
 
 from __future__ import annotations
@@ -18,8 +23,15 @@ import anyio
 import dagger
 from dagger import dag
 
-PYTEST_CMD = "uv run pytest --junit-xml=junit.xml -o junit_family=xunit1 || true"
+# The trailing `echo $? > /src/pytest_rc` always exits 0, so the `with_exec`
+# succeeds and `junit.xml` is guaranteed exportable; main() reads pytest_rc back
+# and re-raises the real code. Do NOT restore a `|| true` here (see ai-eun).
+PYTEST_CMD = (
+    "uv run pytest --junit-xml=junit.xml -o junit_family=xunit1; "
+    "echo $? > /src/pytest_rc"
+)
 JUNIT_HOST_PATH = "junit.xml"
+PYTEST_RC_PATH = "/src/pytest_rc"
 
 # Tests in tests/scripts/test_deploy_webhook.py shell out to `git status` and
 # scripts/webhooks-redeploy.py itself runs `git rev-parse --show-toplevel`. When
@@ -74,8 +86,39 @@ def build_container() -> dagger.Container:
 async def main() -> None:
     async with dagger.connection(config=dagger.Config(log_output=sys.stderr)):
         ctr = build_container()
-        await ctr.file("/src/junit.xml").export(JUNIT_HOST_PATH)
-        print(f"exported junit report to {JUNIT_HOST_PATH}")
+
+        # Read pytest's real exit code (captured in PYTEST_CMD) first so we know
+        # whether a missing report is an expected consequence of a crashed run or
+        # a genuine problem. Any failure to read or parse it (missing file from a
+        # killed/cancelled container, empty value, non-integer) fails closed at
+        # rc=1 so the job goes red with a controlled message, not a traceback.
+        try:
+            rc = int((await ctr.file(PYTEST_RC_PATH).contents()).strip())
+        except (dagger.DaggerError, ValueError) as exc:
+            sys.stderr.write(
+                f"warning: could not read pytest exit code from {PYTEST_RC_PATH} "
+                f"({exc}); failing closed at rc=1\n",
+            )
+            rc = 1
+
+        # Export the report so it reaches the host (and Trunk). A passing run
+        # MUST produce one, so an export failure there is fatal (re-raise → red).
+        # When pytest already failed, a missing junit.xml is an expected side
+        # effect of the crash — warn and keep the real rc rather than masking it.
+        try:
+            await ctr.file("/src/junit.xml").export(JUNIT_HOST_PATH)
+            print(f"exported junit report to {JUNIT_HOST_PATH}")
+        except dagger.DaggerError as exc:
+            if rc == 0:
+                raise
+            sys.stderr.write(
+                f"warning: could not export {JUNIT_HOST_PATH} "
+                f"(pytest already exited {rc}): {exc}\n",
+            )
+
+    if rc != 0:
+        sys.stderr.write(f"pytest exited {rc}\n")
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

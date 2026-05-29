@@ -41,6 +41,14 @@ _BOOTSTRAP_BLOCKERS: dict[str, str] = {
 # precheck rather than emitting a misleading red banner.
 _ATTIO_KEY_MIN_LEN = 64
 
+# Exit code used when the preflight aborts because a required Attio object is
+# missing ("infra not ready"), deliberately distinct from pytest's own reserved
+# codes (0–5) and from 1 (a genuine test failure) so operators can tell an
+# unbootstrapped workspace apart from a real regression at a glance. Both are
+# non-zero, so CI is RED either way. Keep in sync with the constant of the same
+# name in .github/workflows/ci/pytest_integration_dagger.py.
+PREFLIGHT_MISSING_OBJECT_RC = 86
+
 
 def _emit_gh_actions_error(message: str) -> None:
     # GitHub Actions surfaces "::error::" workflow commands as red banners on
@@ -116,4 +124,4 @@ def pytest_collection_modifyitems(
 
     message = _format_missing_objects_message(missing, _BOOTSTRAP_BLOCKERS)
     _emit_gh_actions_error(message)
-    pytest.exit(reason=message, returncode=1)
+    pytest.exit(reason=message, returncode=PREFLIGHT_MISSING_OBJECT_RC)
