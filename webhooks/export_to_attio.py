@@ -10,6 +10,7 @@ import orjson
 from fastapi import Request
 from modal import Image
 
+from libs.attio.preflight import assert_attio_token_scopes
 from libs.logging.structured import (
     log,
     set_source,
@@ -99,6 +100,25 @@ def _export(webhook: WebhookModel) -> str:
         return reason
     required = WebhookModel.required_api_keys()
     with hydrate(*required):
+        # Fail fast with an actionable message if the Attio token lacks a scope
+        # the writer path needs, instead of surfacing Attio's opaque
+        # "...does not exist or you do not have permission..." four ops deep
+        # inside a write (ai-ica). Cheap: one cached /v2/self per token.
+        #
+        # NOTE: this uses the default profile, where `object_configuration:
+        # read-write` is RECOMMENDED (warn), not REQUIRED (raise) — deliberately.
+        # A webhook token only needs `record_permission:read-write` at runtime
+        # once the tracking_events schema is pre-bootstrapped (the closed
+        # meeting vocabulary is seeded, so JIT ensure_select_options becomes a
+        # no-op GET). Hard-requiring schema-mutation scope here would force every
+        # webhook token to carry the power to rewrite the workspace schema —
+        # against least privilege. The residual case (a genuinely new, unseeded
+        # option, e.g. a new `source` emitter, on a restricted token) is no
+        # longer opaque: classify_error tags it `insufficient_scope` with
+        # remediation. The bootstrap script, which DOES mutate schema, requires
+        # the stronger scope explicitly.
+        if "ATTIO_API_KEY" in required:
+            assert_attio_token_scopes()
         plan = webhook.attio_get_operations()
         log("webhook.validated", op_count=len(plan))
         return execute(plan).body()

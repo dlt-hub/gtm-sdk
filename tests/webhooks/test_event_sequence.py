@@ -125,6 +125,25 @@ def _stub_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("ATTIO_API_KEY", "stub-attio-key-for-tests")
     monkeypatch.setenv("CALCOM_API_KEY", "stub-calcom-key-for-tests")
+    # The Attio scope preflight in `_export` would otherwise make a real
+    # GET /v2/self with the stub key. Stub the (module-internal) fetch so the
+    # preflight passes without network — these tests assert on event-sequence
+    # logging, not scope validation. Patching `fetch_token_scopes` works even
+    # though the handler imported `assert_attio_token_scopes` by reference,
+    # because that function resolves `fetch_token_scopes` from the preflight
+    # module globals at call time.
+    import libs.attio.preflight as _preflight
+
+    def _full_scope(api_key: str | None = None) -> tuple[bool, set[str], str]:
+        del api_key
+        return (
+            True,
+            {"record_permission:read-write", "object_configuration:read-write"},
+            "test-workspace",
+        )
+
+    _preflight.reset_scope_cache()
+    monkeypatch.setattr(_preflight, "fetch_token_scopes", _full_scope)
 
 
 @pytest.fixture

@@ -120,12 +120,19 @@ def create_attribute(
 ) -> AttributeCreateResult:
     with get_client() as client:
         try:
+            # show_archived=True so an archived slug is visible here. Without it,
+            # Attio hides archived attributes from the list, the slug looks free,
+            # and the POST below 409s on the still-reserved slug — the
+            # non-idempotent bug behind the ai-ica prod bootstrap crash. We
+            # restore (un-archive) such slugs instead of recreating them.
             attributes_response = client.attributes.get_v2_target_identifier_attributes(
                 target="objects",
                 identifier=target_object,
+                show_archived=True,
             )
-            existing_attribute_slugs = {
-                getattr(attr, "api_slug", "") for attr in attributes_response.data
+            archived_by_slug = {
+                getattr(attr, "api_slug", ""): bool(getattr(attr, "is_archived", False))
+                for attr in attributes_response.data
             }
         except SDKError as exc:
             # Parent object does not exist yet (e.g. preview run before bootstrap).
@@ -134,11 +141,16 @@ def create_attribute(
             status = getattr(getattr(exc, "raw_response", None), "status_code", None)
             if status != 404:
                 raise
-            existing_attribute_slugs = set()
-        attribute_exists = api_slug in existing_attribute_slugs
-        attribute_created = False
+            archived_by_slug = {}
 
-        if not attribute_exists and apply:
+        slug_present = api_slug in archived_by_slug
+        slug_archived = archived_by_slug.get(api_slug, False)
+        # ``attribute_exists`` keeps its historical meaning: present AND active.
+        attribute_exists = slug_present and not slug_archived
+        attribute_created = False
+        attribute_restored = False
+
+        if apply and not slug_present:
             config: dict[str, object] = {}
             if attribute_type == "record-reference":
                 # Attio requires record-reference attributes to declare which
@@ -163,6 +175,15 @@ def create_attribute(
                 data=payload,
             )
             attribute_created = True
+        elif apply and slug_archived:
+            # Slug exists but archived: restore it rather than POST (which 409s).
+            client.attributes.patch_v2_target_identifier_attributes_attribute_(
+                target="objects",
+                identifier=target_object,
+                attribute=api_slug,
+                data={"is_archived": False},
+            )
+            attribute_restored = True
 
     return AttributeCreateResult(
         mode="apply" if apply else "preview",
@@ -171,6 +192,8 @@ def create_attribute(
         attribute_type=attribute_type,
         attribute_exists=attribute_exists,
         attribute_created=attribute_created,
+        attribute_archived=slug_archived,
+        attribute_restored=attribute_restored,
     )
 
 

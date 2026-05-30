@@ -50,7 +50,15 @@ def api_key_scope(api_key: str) -> Generator[None, None, None]:
         _api_key_var.reset(token)
 
 
-def get_client(api_key: str | None = None):
+def resolve_api_key(api_key: str | None = None) -> str:
+    """Resolve the active Attio token via the documented precedence.
+
+    Single source of truth for the resolution order described in the module
+    docstring, shared by :func:`get_client` and the scope preflight in
+    ``libs.attio.preflight`` (the latter fingerprints the resolved token to
+    cache its ``/v2/self`` check per process). Raises :class:`AttioAuthError`
+    when no token resolves.
+    """
     token = (
         api_key or _api_key_var.get() or os.environ.get("ATTIO_API_KEY", "")
     ).strip()
@@ -61,6 +69,11 @@ def get_client(api_key: str | None = None):
             "(2) call inside libs.attio.client.api_key_scope(...), "
             "(3) set ATTIO_API_KEY in the process environment.",
         )
+    return token
+
+
+def get_client(api_key: str | None = None):
+    token = resolve_api_key(api_key)
     Attio = get_attio_sdk_client_class()
     return Attio(
         oauth2=token,

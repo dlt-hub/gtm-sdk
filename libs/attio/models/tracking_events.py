@@ -99,3 +99,10 @@ class MeetingLifecycleEventInput(BaseModel):
     # UpsertPerson before emitting EmitMeetingLifecycleEvent so this is always
     # set when the helper runs.
     host_person_record_id: str
+    # Workspace-member id to stamp as the row's ``owner`` actor. Resolved per
+    # workspace from the active token (``/v2/self``
+    # authorized_by_workspace_member_id) by the orchestration layer — NOT
+    # hardcoded, since member ids differ between the dev and prod workspaces
+    # (ai-ica). ``None`` omits the owner field rather than writing an invalid
+    # actor reference (owner is best-effort metadata, not required by schema).
+    owner_member_id: str | None = None

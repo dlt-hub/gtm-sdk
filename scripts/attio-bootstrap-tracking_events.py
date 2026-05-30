@@ -16,22 +16,38 @@ B. Meeting-lifecycle row model. Surfaces cal.com meeting lifecycle as a
    the meeting transitions through states. See
    ``design/backlog-202605251625-meeting_state_attrs_on_tracking_events-spec-01.md``.
 
-The schema audit (2026-05-25) found prod's ``tracking_events`` already has
-every lifecycle slug the dispatcher needs (``details``, ``no_show``,
-``people``, plus the existing baseline). Dev is behind prod -- it has
-``contact`` instead of ``people`` and lacks ``details`` / ``no_show``. This
-script brings dev in line with prod and seeds the new select options on both.
+Workspace state — verify against the LIVE schema before trusting any prior
+audit note; the two workspaces have drifted in both directions:
+
+- A 2026-05-29 live audit (ai-ica) found **prod was never ``--apply``'d**: prod's
+  ``tracking_events`` was MISSING ``no_show`` and the meeting select options
+  (``event_type:calcom_meeting`` and the ``scheduled``/``cancelled``/
+  ``rescheduled``/``no_show_host`` ``event_subtype`` states). Prod did already
+  have ``details``, ``people``, and ``source``. Prod's ``no_show`` is not absent
+  but **archived** (``is_archived=True``) — hidden from the default attributes
+  list, so it must be RESTORED (un-archived), not recreated; a plain create 409s
+  on the still-reserved slug. Skipping the prod apply is what broke prod cal.com
+  ``EmitMeetingLifecycleEvent`` — the dispatcher's JIT ``ensure_select_options``
+  POST hit the missing ``calcom_meeting`` option, and the restricted prod token
+  lacks ``object_configuration:read-write`` to create options or restore
+  attributes.
+- Dev was ``--apply``'d earlier: it has ``people``/``details``/``no_show`` plus a
+  vestigial ``contact`` (rb2b still writes it) and an orphaned ``meeting_status``.
+
+Run ``--apply`` against **both** workspaces and re-query the live schema to
+confirm, rather than assuming either side is already done.
 
 What this script does in each workspace:
 
 1. Add the ``source`` select attribute (cross-emitter filter). Option titles
    grow JIT on first write per emitter -- this only creates the attribute.
 2. Add the ``people`` record-reference attribute (allowed_objects=["people"]).
-   No-op on prod where it already exists.
-3. Add the ``details`` text attribute. No-op on prod.
-4. Add the ``no_show`` checkbox attribute. No-op on prod.
+   No-op where it already exists (both workspaces, as of 2026-05-29).
+3. Add the ``details`` text attribute. No-op where it already exists (both).
+4. Ensure the ``no_show`` checkbox attribute is active. RESTORES it on prod
+   (archived as of 2026-05-29); no-op on dev where it is already active.
 5. Seed ``event_type`` option ``calcom_meeting`` (single namespace value used by
-   every meeting-lifecycle row).
+   every meeting-lifecycle row). Creates it on prod (missing as of 2026-05-29).
 6. Seed ``event_subtype`` options: ``scheduled``, ``cancelled``, ``rescheduled``,
    ``no_show_attendee``, ``no_show_host``, ``completed``.
 
@@ -61,6 +77,15 @@ import argparse
 from pathlib import Path
 
 from libs.attio.attributes import create_attribute, ensure_select_options
+from libs.attio.preflight import assert_attio_token_scopes
+
+# This script only mutates schema (creates/restores attributes, seeds select
+# options) — it never writes records — so its required scope is
+# ``object_configuration:read-write``, not ``record_permission``. Asserting it
+# up front turns a missing grant into a clear message before the first Attio
+# mutation, instead of the opaque "...does not exist or you do not have
+# permission..." this whole change exists to eliminate (ai-ica).
+_BOOTSTRAP_REQUIRED_SCOPES = frozenset({"object_configuration:read-write"})
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -103,6 +128,13 @@ _ATTRIBUTES: tuple[tuple[str, str, str, dict[str, object] | None], ...] = (
 def main(apply: bool) -> int:
     results: list[tuple[str, str]] = []
 
+    if apply:
+        # Preview is read-only, so only gate the mutating path.
+        assert_attio_token_scopes(
+            required=_BOOTSTRAP_REQUIRED_SCOPES,
+            recommended=frozenset(),
+        )
+
     # Create the attributes first; ensure_select_options on event_type /
     # event_subtype below works regardless of whether the lifecycle attributes
     # exist, but doing creates first keeps the printed result order matching
@@ -121,16 +153,18 @@ def main(apply: bool) -> int:
             description=description,  # type: ignore[arg-type]
             apply=apply,
         )
-        results.append(
-            (
-                slug,
-                "created"
-                if r.attribute_created
-                else "exists"
-                if r.attribute_exists
-                else "would-create",
-            ),
-        )
+        if r.attribute_created:
+            status = "created"
+        elif r.attribute_restored:
+            status = "restored (un-archived)"
+        elif r.attribute_exists:
+            status = "exists"
+        elif r.attribute_archived:
+            # preview: present but archived — apply would un-archive it.
+            status = "would-restore"
+        else:
+            status = "would-create"
+        results.append((slug, status))
 
     # Seed event_type:calcom_meeting (additive; existing options untouched).
     added_event_types = ensure_select_options(

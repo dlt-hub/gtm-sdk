@@ -30,6 +30,7 @@ def _valid_input(**overrides: object) -> MeetingLifecycleEventInput:
         body_json='{"reason":"redacted"}',
         details_line="2026-05-14T00:00:00Z cancelled — by host@dlthub.com: reason",
         host_person_record_id="pe_host_1",
+        owner_member_id="wm_test_owner",
     )
     base.update(overrides)
     return MeetingLifecycleEventInput(**base)  # type: ignore[arg-type]
@@ -129,17 +130,45 @@ def test_miss_then_create_writes_full_value_set(
     assert "contact" not in values
     # no_show false for non-no_show variants.
     assert values["no_show"] == [{"value": False}]
-    # owner carries the hardcoded actor UUID.
+    # owner carries the per-workspace actor id supplied by the orchestration
+    # layer (resolved from the token), NOT a hardcoded UUID (ai-ica).
     assert values["owner"] == [
         {
             "referenced_actor_type": "workspace-member",
-            "referenced_actor_id": "663f9ad9-6704-5aff-be6d-48edb58bd12c",
+            "referenced_actor_id": "wm_test_owner",
         },
     ]
     # First arrival → details starts with this transition's line, no prefix.
     assert values["details"] == [
         {"value": "2026-05-14T00:00:00Z cancelled — by host@dlthub.com: reason"},
     ]
+
+
+@patch("libs.attio.tracking_events.ensure_select_options")
+@patch("libs.attio.tracking_events.get_client")
+def test_owner_omitted_when_member_id_unresolved(
+    mock_get_client: MagicMock,
+    mock_ensure_options: MagicMock,  # noqa: ARG001
+) -> None:
+    """owner_member_id=None → owner slug omitted, not written as an invalid ref.
+
+    Writing an invalid actor reference is what failed the whole prod lifecycle
+    write in ai-ica; omitting best-effort owner metadata is the safe fallback.
+    """
+    client = MagicMock()
+    client.records.post_v2_objects_object_records_query.return_value.data = []
+    create_resp = MagicMock()
+    create_resp.data.id.record_id = "te_new"
+    client.records.post_v2_objects_object_records.return_value = create_resp
+    mock_get_client.return_value.__enter__.return_value = client
+
+    env = find_or_create_meeting_lifecycle_event(_valid_input(owner_member_id=None))
+
+    assert env.success is True
+    values = _values_from_call(client.records.post_v2_objects_object_records.call_args)
+    assert "owner" not in values
+    # The rest of the row is still written.
+    assert values["event_type"] == [{"option": "calcom_meeting"}]
 
 
 @patch("libs.attio.tracking_events.ensure_select_options")

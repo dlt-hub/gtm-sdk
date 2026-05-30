@@ -127,6 +127,14 @@ def main() -> int:
 
     from src.attio.export import execute
 
+    if args.execute:
+        # Validate the Attio token's scopes once up front so a misconfigured key
+        # fails the whole run immediately with an actionable message, rather than
+        # failing every row deep inside a write (ai-ica).
+        from libs.attio.preflight import assert_attio_token_scopes
+
+        assert_attio_token_scopes()
+
     processed = written = failed = 0
     fail_details: list[str] = []
 

@@ -1,3 +1,4 @@
+# trunk-ignore-all(pyright/reportUnusedFunction): autouse pytest fixtures are invoked by name
 from __future__ import annotations
 
 import importlib.util
@@ -36,6 +37,31 @@ def _stub_iter(meetings: list[M.Meeting]):
         yield from meetings
 
     return _iter
+
+
+def _full_scope(api_key: str | None = None) -> tuple[bool, set[str], str]:
+    del api_key
+    return (
+        True,
+        {"record_permission:read-write", "object_configuration:read-write"},
+        "test-workspace",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_attio_scope_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the Attio scope preflight that --execute runs before dispatching.
+
+    The backfill calls ``assert_attio_token_scopes`` before its execute loop;
+    without a stub it would make a real GET /v2/self. Patching the
+    module-internal ``fetch_token_scopes`` makes the preflight pass with no
+    network (it is resolved from the preflight module globals at call time).
+    """
+    import libs.attio.preflight as _preflight
+
+    _preflight.reset_scope_cache()
+    monkeypatch.setenv("ATTIO_API_KEY", "stub-attio-key-for-tests")
+    monkeypatch.setattr(_preflight, "fetch_token_scopes", _full_scope)
 
 
 def test_dry_run_prints_ops_and_does_not_execute(

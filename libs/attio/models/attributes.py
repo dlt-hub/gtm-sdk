@@ -10,8 +10,17 @@ class AttributeCreateResult(BaseModel):
     attribute_title: str
     attribute_slug: str
     attribute_type: str
+    # ``attribute_exists`` is the active-and-present pre-state (historical
+    # meaning). ``attribute_archived`` is the observed pre-state for a slug that
+    # is present but archived (is_archived=True) — hidden from the default
+    # attributes list, so a naive create would POST and 409 on the still-reserved
+    # slug (the non-idempotent bug behind the ai-ica prod bootstrap crash). Both
+    # are populated in preview and apply so callers can report would-create vs
+    # would-restore. ``attribute_restored`` records that an apply un-archived it.
     attribute_exists: bool
     attribute_created: bool
+    attribute_archived: bool = False
+    attribute_restored: bool = False
 
 
 class AttributeInfo(BaseModel):

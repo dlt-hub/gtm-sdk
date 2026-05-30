@@ -17,12 +17,13 @@ from libs.attio.values import build_tracking_event_values
 _OBJECT = "tracking_events"
 _MULTISELECT_FIELDS: tuple[str, ...] = ("tags",)
 
-# Workspace-member UUID for Elvis. Hardcoded as the ``owner`` actor on every
-# cal.com meeting-lifecycle row. Confirmed by the user 2026-05-25; the prod
-# people-records audit returned a different UUID (587ae272-...) which belongs
-# to some other actor — do NOT use that one. See spec at
+# NOTE: the ``owner`` actor is NO LONGER hardcoded. Workspace-member ids are
+# per-workspace, and the previous hardcoded dev-era UUID was invalid in prod —
+# Attio rejected the lifecycle write with "Invalid value supplied for attribute
+# owner" (ai-ica). The owner is now resolved per workspace from the active
+# token's ``/v2/self`` identity at the orchestration layer and passed in via
+# ``MeetingLifecycleEventInput.owner_member_id``. See
 # design/backlog-202605251625-meeting_state_attrs_on_tracking_events-spec-01.md.
-_LIFECYCLE_OWNER_ACTOR_UUID = "663f9ad9-6704-5aff-be6d-48edb58bd12c"
 
 # The single ``event_type`` value carrying every meeting-lifecycle row.
 # Differentiates from ``rb2b_visit`` / ``form_submission`` etc. on the same
@@ -134,7 +135,8 @@ def find_or_create_meeting_lifecycle_event(
     - ``no_show`` — True when state ∈ {no_show_attendee, no_show_host}
     - ``timestamp`` — webhook createdAt (overwritten)
     - ``people`` — host's Person record id
-    - ``owner`` — Elvis's workspace-member UUID
+    - ``owner`` — workspace-member actor from ``input.owner_member_id``
+      (resolved per workspace from the token; omitted when unset)
 
     Idempotency: ``external_id`` is non-unique in schema (see ai-277), so we
     query-then-patch instead of using the SDK's native assert path.
@@ -260,13 +262,19 @@ def find_or_create_meeting_lifecycle_event(
                             "target_record_id": input.host_person_record_id,
                         },
                     ],
-                    "owner": [
+                }
+                # Owner is best-effort metadata. Only write it when the
+                # orchestration layer resolved a workspace-member id for the
+                # active token's workspace; omitting it is preferable to writing
+                # an invalid actor reference, which Attio rejects and which
+                # would fail the entire lifecycle write (ai-ica).
+                if input.owner_member_id:
+                    values["owner"] = [
                         {
                             "referenced_actor_type": "workspace-member",
-                            "referenced_actor_id": _LIFECYCLE_OWNER_ACTOR_UUID,
+                            "referenced_actor_id": input.owner_member_id,
                         },
-                    ],
-                }
+                    ]
 
             if existing:
                 record_id = existing[0].id.record_id

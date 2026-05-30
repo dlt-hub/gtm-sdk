@@ -45,6 +45,7 @@ from libs.attio.people import (
     get_person_values,
     upsert_person as libs_upsert_person,
 )
+from libs.attio.preflight import resolve_owner_member_id
 from libs.attio.tracking_events import (
     find_or_create_meeting_lifecycle_event,
     find_or_create_tracking_event,
@@ -573,6 +574,10 @@ def _handle_emit_meeting_lifecycle_event(
             body_json=op.body_json,
             details_line=op.details_line,
             host_person_record_id=host_record_id,
+            # Resolve the owner actor from the active token's workspace, so the
+            # row is owned correctly in whichever workspace (dev/prod) the token
+            # targets. Cached per token; never hardcoded (ai-ica).
+            owner_member_id=resolve_owner_member_id(),
         ),
     )
 

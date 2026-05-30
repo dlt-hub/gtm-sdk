@@ -19,14 +19,15 @@ def _resp(data):
     return SimpleNamespace(data=data)
 
 
-def _attr(slug: str):
-    return SimpleNamespace(api_slug=slug)
+def _attr(slug: str, *, is_archived: bool = False):
+    return SimpleNamespace(api_slug=slug, is_archived=is_archived)
 
 
 class _FakeAttributes:
     def __init__(self, attrs=None, options=None, option_post_errors=None):
         self.attrs = attrs or []
         self.created_attrs: list[dict[str, object]] = []
+        self.restored_slugs: list[str] = []
         self.options = options or []
         self.created_options: list[dict[str, object]] = []
         # Mapping of option title -> Exception to raise when POSTed. Each entry
@@ -37,10 +38,33 @@ class _FakeAttributes:
             option_post_errors or {},
         )
 
-    def get_v2_target_identifier_attributes(self, *, target, identifier):
+    def get_v2_target_identifier_attributes(
+        self,
+        *,
+        target,
+        identifier,
+        show_archived=None,
+    ):
         assert target == "objects"
         assert identifier == "companies"
+        # create_attribute always asks for archived slugs so it can restore
+        # rather than 409 on a reserved-but-archived slug (ai-ica).
+        assert show_archived is True
         return _resp(self.attrs)
+
+    def patch_v2_target_identifier_attributes_attribute_(
+        self,
+        *,
+        target,
+        identifier,
+        attribute,
+        data,
+    ):
+        assert target == "objects"
+        assert identifier == "companies"
+        assert data == {"is_archived": False}
+        self.restored_slugs.append(attribute)
+        return _resp(_attr(attribute))
 
     def post_v2_target_identifier_attributes(self, *, target, identifier, data):
         assert target == "objects"
@@ -165,6 +189,69 @@ def test_create_companies_attribute_apply_is_noop_when_already_exists(
     assert result.attribute_exists is True
     assert result.attribute_created is False
     assert fake.created_attrs == []
+
+
+def test_create_attribute_apply_restores_archived_slug(monkeypatch) -> None:
+    # The slug exists but is archived: create_attribute must un-archive it
+    # (PATCH), NOT POST — POSTing 409s on the still-reserved slug. This is the
+    # exact prod state behind ai-ica (no_show archived on tracking_events).
+    fake = _FakeAttributes(attrs=[_attr("no_show", is_archived=True)])
+    monkeypatch.setattr("libs.attio.attributes.get_client", lambda: _FakeClient(fake))
+
+    result = create_companies_attribute(
+        title="No Show",
+        api_slug="no_show",
+        attribute_type="checkbox",
+        is_multiselect=False,
+        apply=True,
+    )
+
+    assert result.attribute_created is False
+    assert result.attribute_restored is True
+    assert result.attribute_archived is True
+    assert result.attribute_exists is False  # pre-state: not active
+    assert fake.created_attrs == []  # no POST attempted
+    assert fake.restored_slugs == ["no_show"]
+
+
+def test_create_attribute_preview_reports_would_restore_for_archived(
+    monkeypatch,
+) -> None:
+    fake = _FakeAttributes(attrs=[_attr("no_show", is_archived=True)])
+    monkeypatch.setattr("libs.attio.attributes.get_client", lambda: _FakeClient(fake))
+
+    result = create_companies_attribute(
+        title="No Show",
+        api_slug="no_show",
+        attribute_type="checkbox",
+        is_multiselect=False,
+        apply=False,
+    )
+
+    assert result.attribute_archived is True
+    assert result.attribute_exists is False
+    assert result.attribute_restored is False  # preview never writes
+    assert fake.created_attrs == []
+    assert fake.restored_slugs == []
+
+
+def test_create_attribute_apply_active_slug_is_noop(monkeypatch) -> None:
+    fake = _FakeAttributes(attrs=[_attr("no_show", is_archived=False)])
+    monkeypatch.setattr("libs.attio.attributes.get_client", lambda: _FakeClient(fake))
+
+    result = create_companies_attribute(
+        title="No Show",
+        api_slug="no_show",
+        attribute_type="checkbox",
+        is_multiselect=False,
+        apply=True,
+    )
+
+    assert result.attribute_exists is True
+    assert result.attribute_created is False
+    assert result.attribute_restored is False
+    assert fake.created_attrs == []
+    assert fake.restored_slugs == []
 
 
 def test_ensure_select_options_swallows_409_conflict(monkeypatch) -> None:
