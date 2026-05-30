@@ -18,11 +18,11 @@ class _Resp:
 
 
 _ALL_PROVIDER_ENV = {
-    "HYPERDX_API_KEY": "hx",  # trunk-ignore(bandit/B105): test fixture
-    "DASH0_AUTH_TOKEN": "d0",  # trunk-ignore(bandit/B105): test fixture
+    "HYPERDX_API_KEY": "hx",  # nosec: B105
+    "DASH0_AUTH_TOKEN": "d0",  # nosec: B105
     "DASH0_OTLP_ENDPOINT": "https://ingress.us-west-2.aws.dash0.com",
     "DASH0_DATASET": "prod",
-    "LOGFIRE_WRITE_TOKEN": "lf",  # trunk-ignore(bandit/B105): test fixture
+    "LOGFIRE_WRITE_TOKEN": "lf",  # nosec: B105
 }
 
 
@@ -86,7 +86,7 @@ def test_build_config_subset_and_empty():
 
 def test_build_config_strips_full_signal_url_to_base():
     env = {
-        "HYPERDX_API_KEY": "hx",  # trunk-ignore(bandit/B105): test fixture
+        "HYPERDX_API_KEY": "hx",  # nosec: B105
         "HYPERDX_OTLP_ENDPOINT": "https://in-otel.hyperdx.io/v1/traces",
     }
     cfg = build_collector_config(env)

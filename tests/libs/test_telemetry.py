@@ -595,6 +595,7 @@ def test_collector_function_reads_env(monkeypatch):
     assert _collector_function() is None
     monkeypatch.setenv("TELEMETRY_COLLECTOR_APP", "otel-collector")
     assert _collector_function() == ("otel-collector", "fan_out")
+    # Function name is configurable; env var is used
     monkeypatch.setenv("TELEMETRY_COLLECTOR_FUNCTION", "ship")
     assert _collector_function() == ("otel-collector", "ship")
 

@@ -134,21 +134,24 @@ def _hyperdx_auth_headers(hyperdx_key: str | None) -> dict[str, str]:
 # (Dash0 + HyperDX + Logfire) with real batching/retry/queueing. This keeps
 # provider credentials on the collector only, gives the app a single "write",
 # centralizes fan-out, and uses Modal RPC as the ingress (no public endpoint).
+#
+# Environment variables:
+# - TELEMETRY_COLLECTOR_APP: Name of the Modal app hosting the collector. Required to enable.
+# - TELEMETRY_COLLECTOR_FUNCTION: Name of the function within the app (defaults to "fan_out").
 
 
 def _collector_function() -> tuple[str, str] | None:
     """Return the ``(app, function)`` of the telemetry collector, or ``None``.
 
-    Configured via ``TELEMETRY_COLLECTOR_APP`` (required to enable the collector
-    path) and ``TELEMETRY_COLLECTOR_FUNCTION`` (default ``"fan_out"``). When
-    unset, ``init_tracer`` / ``init_log_exporter`` fall back to the direct
-    single-endpoint OTLP behavior below.
+    When ``TELEMETRY_COLLECTOR_APP`` is set in the environment, enables the
+    collector path; otherwise falls back to the direct single-endpoint OTLP
+    behavior.
     """
-    app_name = os.environ.get("TELEMETRY_COLLECTOR_APP")
-    if not app_name:
+    app = os.environ.get("TELEMETRY_COLLECTOR_APP", "").strip()
+    if not app:
         return None
-    fn_name = os.environ.get("TELEMETRY_COLLECTOR_FUNCTION") or "fan_out"
-    return (app_name, fn_name)
+    fn = os.environ.get("TELEMETRY_COLLECTOR_FUNCTION", "").strip() or "fan_out"
+    return (app, fn)
 
 
 def _spawn_collector(
@@ -170,7 +173,7 @@ def _spawn_collector(
     handle.spawn(
         signal,
         payload,
-    )  # trunk-ignore(pyrefly/invalid-param-spec): Modal's ParamSpec signature on a from_name handle is opaque to the type checker
+    )
 
 
 def _build_spawn_span_exporter(collector: tuple[str, str]):

@@ -48,7 +48,7 @@ from typing import Any
 
 import modal
 
-APP_NAME = os.environ.get("TELEMETRY_COLLECTOR_APP", "otel-collector")
+APP_NAME = "otel-collector"
 
 # The otelcol OTLP/HTTP receiver — bound to localhost only, so it is reachable
 # from the ``fan_out`` function in the same container but never from outside.
