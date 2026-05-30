@@ -123,8 +123,180 @@ def _hyperdx_auth_headers(hyperdx_key: str | None) -> dict[str, str]:
     return {"authorization": value}
 
 
+# --- Collector fan-out -----------------------------------------------------
+#
+# When ``TELEMETRY_COLLECTOR_APP`` is set, the app exports telemetry to a single
+# middle layer instead of talking to providers directly: a custom OTEL exporter
+# serializes each batch to OTLP protobuf and fire-and-forget ``.spawn()``s the
+# collector Modal function (``src/otel_collector.py``). That function feeds the
+# bytes to an OpenTelemetry Collector running as a localhost sidecar inside the
+# (always-warm) collector container, which fans out to every configured provider
+# (Dash0 + HyperDX + Logfire) with real batching/retry/queueing. This keeps
+# provider credentials on the collector only, gives the app a single "write",
+# centralizes fan-out, and uses Modal RPC as the ingress (no public endpoint).
+
+
+def _collector_function() -> tuple[str, str] | None:
+    """Return the ``(app, function)`` of the telemetry collector, or ``None``.
+
+    Configured via ``TELEMETRY_COLLECTOR_APP`` (required to enable the collector
+    path) and ``TELEMETRY_COLLECTOR_FUNCTION`` (default ``"fan_out"``). When
+    unset, ``init_tracer`` / ``init_log_exporter`` fall back to the direct
+    single-endpoint OTLP behavior below.
+    """
+    app_name = os.environ.get("TELEMETRY_COLLECTOR_APP")
+    if not app_name:
+        return None
+    fn_name = os.environ.get("TELEMETRY_COLLECTOR_FUNCTION") or "fan_out"
+    return (app_name, fn_name)
+
+
+def _spawn_collector(
+    collector: tuple[str, str],
+    signal: str,
+    payload: bytes,
+) -> None:
+    """Fire-and-forget ``.spawn()`` the collector Modal function with one batch.
+
+    ``modal.Function.from_name`` is lazy (no network until the call), and
+    ``.spawn`` enqueues server-side and returns immediately — so this is safe to
+    call from the BatchProcessor's background export thread and survives the
+    collector being scaled to zero (Modal queues the call).
+    """
+    import modal
+
+    app_name, fn_name = collector
+    handle = modal.Function.from_name(app_name, fn_name)
+    handle.spawn(
+        signal,
+        payload,
+    )  # trunk-ignore(pyrefly/invalid-param-spec): Modal's ParamSpec signature on a from_name handle is opaque to the type checker
+
+
+def _build_spawn_span_exporter(collector: tuple[str, str]):
+    """A ``SpanExporter`` that serializes each batch and spawns the collector."""
+    from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+    from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+
+    class _ModalSpawnSpanExporter(SpanExporter):
+        def export(self, spans: Any) -> Any:
+            try:
+                payload = encode_spans(spans).SerializeToString()
+                _spawn_collector(collector, "traces", payload)
+            except Exception:  # noqa: BLE001 — telemetry is never load-bearing
+                return SpanExportResult.FAILURE
+            return SpanExportResult.SUCCESS
+
+        def shutdown(self) -> None:
+            return None
+
+        def force_flush(self, timeout_millis: int = 30000) -> bool:
+            return True
+
+    return _ModalSpawnSpanExporter()
+
+
+def _build_spawn_log_exporter(collector: tuple[str, str]):
+    """A ``LogRecordExporter`` that serializes each batch and spawns the collector."""
+    from opentelemetry.exporter.otlp.proto.common._log_encoder import encode_logs
+    from opentelemetry.sdk._logs.export import (
+        LogRecordExporter,
+        LogRecordExportResult,
+    )
+
+    class _ModalSpawnLogExporter(LogRecordExporter):
+        def export(self, batch: Any) -> Any:
+            try:
+                payload = encode_logs(batch).SerializeToString()
+                _spawn_collector(collector, "logs", payload)
+            except Exception:  # noqa: BLE001 — telemetry is never load-bearing
+                return LogRecordExportResult.FAILURE
+            return LogRecordExportResult.SUCCESS
+
+        def shutdown(self) -> None:
+            return None
+
+    return _ModalSpawnLogExporter()
+
+
+def _init_tracer_via_collector(service_name: str, collector: tuple[str, str]):
+    """Build a tracer whose exporter spawns the collector. See ``init_tracer``."""
+    global _tracer  # noqa: PLW0603
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.semconv.attributes import service_attributes
+    except ModuleNotFoundError as exc:
+        print(  # noqa: T201 — import-time, before any logger is wired
+            "telemetry.otlp_disabled "
+            f"reason=opentelemetry_not_installed missing_module={exc.name!r} "
+            f"service_name={service_name!r}",
+            file=sys.stderr,
+        )
+        return None
+    resource = Resource.create(
+        {
+            service_attributes.SERVICE_NAME: service_name,
+            service_attributes.SERVICE_VERSION: "0.1.0",
+        },
+    )
+    provider = TracerProvider(resource=resource)
+    provider.add_span_processor(
+        BatchSpanProcessor(_build_spawn_span_exporter(collector)),
+    )
+    trace.set_tracer_provider(provider)
+    # Flush the BatchSpanProcessor's buffer on exit/recycle so a short-lived CLI
+    # run doesn't drop its last span batch — mirrors the log path's wiring.
+    atexit.register(provider.shutdown)
+    _install_sigterm_bridge_for_atexit()
+    _tracer = trace.get_tracer(service_name)
+    return _tracer
+
+
+def _init_log_exporter_via_collector(service_name: str, collector: tuple[str, str]):
+    """Build a log exporter whose exporter spawns the collector.
+
+    Mirrors ``init_log_exporter``'s provider/cache/atexit wiring.
+    """
+    try:
+        from opentelemetry.sdk._logs import LoggerProvider
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.semconv.attributes import service_attributes
+    except ModuleNotFoundError as exc:
+        print(  # noqa: T201 — import-time, before any logger is wired
+            "telemetry.otlp_disabled "
+            f"reason=opentelemetry_not_installed missing_module={exc.name!r} "
+            f"service_name={service_name!r}",
+            file=sys.stderr,
+        )
+        return None
+    resource = Resource.create(
+        {
+            service_attributes.SERVICE_NAME: service_name,
+            service_attributes.SERVICE_VERSION: "0.1.0",
+        },
+    )
+    provider = LoggerProvider(resource=resource)
+    provider.add_log_record_processor(
+        BatchLogRecordProcessor(_build_spawn_log_exporter(collector)),
+    )
+    atexit.register(provider.shutdown)
+    _install_sigterm_bridge_for_atexit()
+    logger = provider.get_logger("structured")
+    _otlp_loggers[service_name] = logger
+    return logger
+
+
 def init_tracer(service_name: str = "elvis-cli"):
-    """Initialize OTEL tracer. No-op if neither HYPERDX_API_KEY nor OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    """Initialize OTEL tracer.
+
+    When ``TELEMETRY_COLLECTOR_APP`` is set, spans export to the collector Modal
+    function (see ``_init_tracer_via_collector``). Otherwise falls back to the
+    direct single-endpoint path below — a no-op if neither HYPERDX_API_KEY nor
+    OTEL_EXPORTER_OTLP_ENDPOINT is set.
 
     Auth handling mirrors ``init_log_exporter``: the HyperDX Bearer header
     is only injected when the resolved trace endpoint is HyperDX (came
@@ -136,6 +308,12 @@ def init_tracer(service_name: str = "elvis-cli"):
     leaking Bearer auth to a non-HyperDX sink and getting batches rejected.
     """
     global _tracer  # noqa: PLW0603
+
+    # Collector fan-out wins when configured: export to the single middle layer
+    # (one Modal-function spawn per batch) instead of talking to a sink directly.
+    collector = _collector_function()
+    if collector is not None:
+        return _init_tracer_via_collector(service_name, collector)
 
     hyperdx_key = os.environ.get("HYPERDX_API_KEY")
     otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -208,6 +386,10 @@ def init_tracer(service_name: str = "elvis-cli"):
 def init_log_exporter(service_name: str = "elvis-cli"):
     """Initialize an OTLP log exporter alongside ``libs/logging/structured.log()``.
 
+    When ``TELEMETRY_COLLECTOR_APP`` is set, logs export to the collector Modal
+    function (see ``_init_log_exporter_via_collector``); the direct-sink path
+    below is the fallback.
+
     Provider-agnostic: any OTLP-compatible HTTP sink (HyperDX, Datadog OTLP
     intake, Grafana Cloud, a local OTel Collector) works. No-op unless one of
     ``HYPERDX_API_KEY``, ``HYPERDX_OTLP_ENDPOINT``,
@@ -236,6 +418,12 @@ def init_log_exporter(service_name: str = "elvis-cli"):
     """
     if service_name in _otlp_loggers:
         return _otlp_loggers[service_name]
+
+    # Collector fan-out wins when configured: export to the single middle layer
+    # (one Modal-function spawn per batch) instead of talking to a sink directly.
+    collector = _collector_function()
+    if collector is not None:
+        return _init_log_exporter_via_collector(service_name, collector)
 
     hyperdx_key = os.environ.get("HYPERDX_API_KEY")
     logs_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")

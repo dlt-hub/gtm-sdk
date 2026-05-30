@@ -36,6 +36,56 @@ def test_bootstrap_secret_builds_modal_secret(
     assert isinstance(sec, modal.Secret)
 
 
+def _set_sink_and_collector_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("INFISICAL_TOKEN", "t")
+    monkeypatch.setenv("INFISICAL_PROJECT_ID", "p")
+    monkeypatch.setenv("HYPERDX_API_KEY", "hx")
+    monkeypatch.setenv("HYPERDX_OTLP_ENDPOINT", "https://in-otel.hyperdx.io")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector.example.com")
+
+
+def test_bootstrap_payload_collector_mode_withholds_sink_creds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In collector mode, app containers get only the collector pointer — never
+    a provider credential (the collector holds those)."""
+    from src.secrets_bootstrap import (
+        _bootstrap_secret_payload,  # trunk-ignore(pyright/reportPrivateUsage)
+    )
+
+    _set_sink_and_collector_env(monkeypatch)
+    monkeypatch.setenv("TELEMETRY_COLLECTOR_APP", "otel-collector")
+
+    payload = _bootstrap_secret_payload()
+    assert payload["TELEMETRY_COLLECTOR_APP"] == "otel-collector"
+    for sink_key in (
+        "HYPERDX_API_KEY",
+        "HYPERDX_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+    ):
+        assert sink_key not in payload, f"{sink_key} must not reach app containers"
+
+
+def test_bootstrap_payload_baseline_mode_includes_sink_creds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the collector, the direct-sink creds are passed through to
+    support the baseline fallback path."""
+    from src.secrets_bootstrap import (
+        _bootstrap_secret_payload,  # trunk-ignore(pyright/reportPrivateUsage)
+    )
+
+    _set_sink_and_collector_env(monkeypatch)
+    monkeypatch.delenv("TELEMETRY_COLLECTOR_APP", raising=False)
+
+    payload = _bootstrap_secret_payload()
+    assert payload["HYPERDX_API_KEY"] == "hx"
+    assert payload["OTEL_EXPORTER_OTLP_ENDPOINT"] == "https://collector.example.com"
+
+
 def test_hydrate_activates_scopes_for_known_keys(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

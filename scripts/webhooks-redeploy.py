@@ -353,6 +353,11 @@ _OTEL_OPTIONAL_KEYS = (
     "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
     "HYPERDX_API_KEY",
     "HYPERDX_OTLP_ENDPOINT",
+    # Telemetry collector pointer: when set, webhook containers export telemetry
+    # to the collector Modal function (src/otel_collector.py) instead of a sink
+    # directly. The collector holds the provider creds and fans out.
+    "TELEMETRY_COLLECTOR_APP",
+    "TELEMETRY_COLLECTOR_FUNCTION",
 )
 
 

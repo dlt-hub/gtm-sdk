@@ -169,13 +169,38 @@ Deploy each independently with `modal deploy webhooks/<file>.py`.
 
 ## Telemetry
 
-OTEL traces emitted from `libs/telemetry.py`. Activated only when one of:
+OTEL traces and logs emitted from `libs/telemetry.py`. Two export modes:
 
-- `HYPERDX_API_KEY` — direct HyperDX ingestion (auto-prefixes `Bearer`).
-- `HYPERDX_OTLP_ENDPOINT` — overrides the HyperDX endpoint (default `https://in-otel.hyperdx.io/v1/traces`).
-- `OTEL_EXPORTER_OTLP_ENDPOINT` — custom OTEL collector.
+**Collector fan-out (preferred).** Set `TELEMETRY_COLLECTOR_APP` (default function name
+`fan_out`, override with `TELEMETRY_COLLECTOR_FUNCTION`) and the app exports to a single
+middle layer: a custom OTEL exporter serializes each batch to OTLP protobuf and
+fire-and-forget `.spawn()`s the collector Modal function (`src/otel_collector.py`) — pure
+Modal RPC, **no public endpoint**. That function hands the bytes to a real OpenTelemetry
+Collector running as a **localhost sidecar** in the same (always-warm, `min_containers=1`)
+container; the sidecar fans out to **all** configured providers — Dash0, HyperDX, Logfire —
+with real batching, `retry_on_failure`, and a sending queue. Provider credentials live on
+the collector only, not on each app container. The sidecar's OTLP receiver binds to
+`127.0.0.1`, so it is never reachable from outside the container. (Queue is in-memory; a
+container recycle can lose an unflushed batch — fine for non-load-bearing telemetry.)
 
-If none set → tracer is a no-op. CLI calls `init_tracer()` at startup and emits `cli.usage_error` events on Typer exit code 2.
+Deploy the collector on its own (its own Modal app, not a web endpoint):
+
+```shell
+infisical run --projectId "$INFISICAL_PROJECT_ID" --token "$INFISICAL_TOKEN" --env=dev \
+    -- uv run modal deploy src/otel_collector.py
+```
+
+The collector reads provider creds from its own secret: `DASH0_AUTH_TOKEN` +
+`DASH0_OTLP_ENDPOINT` (optional `DASH0_DATASET`, default `default`), `HYPERDX_API_KEY`
+(optional `HYPERDX_OTLP_ENDPOINT`), `LOGFIRE_WRITE_TOKEN` (optional `LOGFIRE_OTLP_ENDPOINT`).
+Each unconfigured provider is silently skipped.
+
+**Direct single-sink (fallback).** When `TELEMETRY_COLLECTOR_APP` is unset, telemetry goes
+to one OTLP sink directly, activated by `HYPERDX_API_KEY` / `HYPERDX_OTLP_ENDPOINT` /
+`OTEL_EXPORTER_OTLP_ENDPOINT` (custom collector). Useful for local dev.
+
+If neither is configured → no-op (telemetry is never load-bearing). CLI calls
+`init_tracer()` at startup and emits `cli.usage_error` events on Typer exit code 2.
 
 ## Conventions
 

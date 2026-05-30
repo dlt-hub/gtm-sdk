@@ -560,3 +560,179 @@ def test_endpoint_is_hyperdx_url_matches_host_not_substring():
     # Empty / None.
     assert not _endpoint_is_hyperdx_url(None)
     assert not _endpoint_is_hyperdx_url("")
+
+
+# --- Collector fan-out (app side) ------------------------------------------
+
+from libs.telemetry import (  # noqa: E402 — grouped with the collector tests below
+    _build_spawn_log_exporter,  # trunk-ignore(pyright/reportPrivateUsage)
+    _build_spawn_span_exporter,  # trunk-ignore(pyright/reportPrivateUsage)
+    _collector_function,  # trunk-ignore(pyright/reportPrivateUsage)
+)
+
+
+def _clear_collector_env(monkeypatch) -> None:
+    for key in (
+        "TELEMETRY_COLLECTOR_APP",
+        "TELEMETRY_COLLECTOR_FUNCTION",
+        "HYPERDX_API_KEY",
+        "HYPERDX_OTLP_ENDPOINT",
+        "DASH0_AUTH_TOKEN",
+        "DASH0_OTLP_ENDPOINT",
+        "DASH0_DATASET",
+        "LOGFIRE_WRITE_TOKEN",
+        "LOGFIRE_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_collector_function_reads_env(monkeypatch):
+    _clear_collector_env(monkeypatch)
+    assert _collector_function() is None
+    monkeypatch.setenv("TELEMETRY_COLLECTOR_APP", "otel-collector")
+    assert _collector_function() == ("otel-collector", "fan_out")
+    monkeypatch.setenv("TELEMETRY_COLLECTOR_FUNCTION", "ship")
+    assert _collector_function() == ("otel-collector", "ship")
+
+
+def _patch_modal_function(monkeypatch):
+    """Patch ``modal.Function.from_name`` to a recorder; return the spawn log."""
+    import modal
+
+    spawned: list[tuple[object, ...]] = []
+
+    class _Handle:
+        def spawn(self, *args):
+            spawned.append(args)
+
+    def _from_name(app_name, fn_name, *_a, **_k):
+        spawned.append(("from_name", app_name, fn_name))
+        return _Handle()
+
+    monkeypatch.setattr(modal.Function, "from_name", staticmethod(_from_name))
+    return spawned
+
+
+def test_spawn_span_exporter_encodes_and_spawns(monkeypatch):
+    spawned = _patch_modal_function(monkeypatch)
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    exporter = _build_spawn_span_exporter(("otel-collector", "fan_out"))
+    result = exporter.export([])  # empty batch -> empty OTLP request bytes
+    assert result == SpanExportResult.SUCCESS
+    assert ("from_name", "otel-collector", "fan_out") in spawned
+    spawn_calls = [s for s in spawned if s and s[0] != "from_name"]
+    assert spawn_calls, f"expected a spawn call; got {spawned}"
+    signal, payload = spawn_calls[0]
+    assert signal == "traces"
+    assert isinstance(payload, bytes)
+
+
+def test_spawn_log_exporter_encodes_and_spawns(monkeypatch):
+    spawned = _patch_modal_function(monkeypatch)
+    from opentelemetry.sdk._logs.export import LogRecordExportResult
+
+    exporter = _build_spawn_log_exporter(("otel-collector", "fan_out"))
+    result = exporter.export([])
+    assert result == LogRecordExportResult.SUCCESS
+    spawn_calls = [s for s in spawned if s and s[0] != "from_name"]
+    assert spawn_calls
+    signal, payload = spawn_calls[0]
+    assert signal == "logs"
+    assert isinstance(payload, bytes)
+
+
+def test_spawn_exporter_swallows_spawn_error(monkeypatch):
+    """A failed spawn must not raise out of export() — telemetry non-load-bearing."""
+    import modal
+
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("modal unreachable")
+
+    monkeypatch.setattr(modal.Function, "from_name", staticmethod(_boom))
+    exporter = _build_spawn_span_exporter(("otel-collector", "fan_out"))
+    assert exporter.export([]) == SpanExportResult.FAILURE
+
+
+def test_init_tracer_uses_collector_when_configured(monkeypatch):
+    """Collector path is taken (and takes precedence over a direct HyperDX key)
+    when TELEMETRY_COLLECTOR_APP is set. The spawn itself happens later on the
+    BatchProcessor flush, so we spy on the collector branch directly."""
+    _clear_collector_env(monkeypatch)
+    # HyperDX key present too — collector path must take precedence over it.
+    monkeypatch.setenv("HYPERDX_API_KEY", "hx")
+    monkeypatch.setenv("TELEMETRY_COLLECTOR_APP", "otel-collector")
+
+    calls: list[tuple[object, ...]] = []
+
+    def _spy(service_name, collector):
+        calls.append((service_name, collector))
+        return "TRACER_SENTINEL"
+
+    monkeypatch.setattr(telemetry_module, "_init_tracer_via_collector", _spy)
+    result = init_tracer("collector-trace-test")
+    assert result == "TRACER_SENTINEL"
+    assert calls == [("collector-trace-test", ("otel-collector", "fan_out"))]
+
+
+def test_init_log_exporter_uses_collector_when_configured(monkeypatch):
+    _patch_modal_function(monkeypatch)
+    _reset_log_exporter(monkeypatch)
+    _clear_collector_env(monkeypatch)
+    monkeypatch.setenv("TELEMETRY_COLLECTOR_APP", "otel-collector")
+    logger = init_log_exporter("collector-log-test")
+    assert logger is not None
+    assert get_otlp_logger("collector-log-test") is logger
+
+
+def test_init_tracer_collector_degrades_without_opentelemetry(monkeypatch):
+    monkeypatch.setattr(telemetry_module, "_tracer", None, raising=False)
+    _clear_collector_env(monkeypatch)
+    monkeypatch.setenv("TELEMETRY_COLLECTOR_APP", "otel-collector")
+    real_import = builtins.__import__
+
+    def _no_otel(name, *args, **kwargs):
+        if name.startswith("opentelemetry"):
+            raise ModuleNotFoundError(
+                "No module named 'opentelemetry'",
+                name="opentelemetry",
+            )
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_otel)
+    assert init_tracer("collector-degrade-test") is None
+
+
+def test_init_tracer_via_collector_registers_atexit_shutdown(monkeypatch):
+    """The collector tracer branch must flush the BatchSpanProcessor on exit,
+    mirroring the log path — otherwise a short-lived CLI run drops its last
+    span batch."""
+    from collections.abc import Callable
+
+    _patch_modal_function(monkeypatch)
+    _clear_collector_env(monkeypatch)
+    monkeypatch.setattr(telemetry_module, "_tracer", None, raising=False)
+    registered: list[Callable[..., object]] = []
+
+    def _capture_atexit(
+        fn: Callable[..., object],
+        *_args: object,
+        **_kwargs: object,
+    ) -> Callable[..., object]:
+        registered.append(fn)
+        return fn
+
+    monkeypatch.setattr("atexit.register", _capture_atexit)
+    monkeypatch.setenv("TELEMETRY_COLLECTOR_APP", "otel-collector")
+    tracer = init_tracer("collector-atexit-trace-test")
+    assert tracer is not None
+    assert any(getattr(fn, "__name__", "") == "shutdown" for fn in registered), (
+        f"collector tracer must register an atexit shutdown; got "
+        f"{[getattr(f, '__name__', f) for f in registered]}"
+    )

@@ -78,20 +78,33 @@ def _otel_secret() -> modal.Secret:
 
     The GCP webhook handlers wire credentials via per-source named Modal
     Secrets (``modal_get_secret_collection_names``), but those collections
-    don't carry OTLP routing config. This helper folds the deploy-shell OTEL
-    env vars into a separate inline secret so ``libs.telemetry`` can pick
-    them up at module import. Missing keys are fine — the exporter is a
-    no-op when nothing is wired.
+    don't carry OTLP routing config. This helper folds the deploy-shell telemetry
+    env vars into a separate inline secret so ``libs.telemetry`` can pick them up
+    at module import. Missing keys are fine — the exporter is a no-op when
+    nothing is wired.
+
+    In collector mode (``TELEMETRY_COLLECTOR_APP`` set) this container receives
+    ONLY the collector pointer — provider creds live on the collector. The
+    direct-sink creds are folded in only when the collector is off, for the
+    baseline fallback. (Kept inline rather than importing the shared helper from
+    ``src.secrets_bootstrap`` so each webhook stays independently deployable.)
     """
+    collector_enabled = bool(os.environ.get("TELEMETRY_COLLECTOR_APP", "").strip())
+    opts: tuple[str, ...] = (
+        "TELEMETRY_COLLECTOR_APP",
+        "TELEMETRY_COLLECTOR_FUNCTION",
+    )
+    if not collector_enabled:
+        opts += (
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+            "HYPERDX_API_KEY",
+            "HYPERDX_OTLP_ENDPOINT",
+        )
     payload: dict[str, str | None] = {}
-    for opt in (
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_HEADERS",
-        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
-        "HYPERDX_API_KEY",
-        "HYPERDX_OTLP_ENDPOINT",
-    ):
+    for opt in opts:
         v = os.environ.get(opt, "").strip()
         if v:
             payload[opt] = v

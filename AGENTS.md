@@ -69,7 +69,7 @@ The pitfalls below explain why `scripts/webhooks-redeploy.py` is shaped the way 
 
 ## Telemetry
 
-OTEL via `libs/telemetry.py`. Activated only when one of these is set: `HYPERDX_API_KEY`, `HYPERDX_OTLP_ENDPOINT`, or `OTEL_EXPORTER_OTLP_ENDPOINT`. Otherwise the tracer is a no-op — don't add fallback logging "just in case."
+OTEL via `libs/telemetry.py`, two modes. **Collector fan-out** (set `TELEMETRY_COLLECTOR_APP`, optional `TELEMETRY_COLLECTOR_FUNCTION`): a custom OTEL exporter serializes each batch and fire-and-forget `.spawn()`s the collector Modal function (`src/otel_collector.py`) over Modal RPC (no public endpoint). That function feeds the bytes to a real OpenTelemetry Collector running as a **localhost sidecar** in the same always-warm (`min_containers=1`) container, which fans out to **all** configured providers (Dash0 + HyperDX + Logfire) with batching/retry/queue. Provider creds live on the collector only; deploy it standalone with `modal deploy src/otel_collector.py`. **Direct single-sink fallback** (collector unset): one OTLP sink via `HYPERDX_API_KEY` / `HYPERDX_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT`. Neither configured → no-op; don't add fallback logging "just in case."
 
 ## Secrets (Infisical)
 

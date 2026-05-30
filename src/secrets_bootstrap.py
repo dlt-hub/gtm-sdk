@@ -52,6 +52,61 @@ KEY_SCOPES: dict[str, Callable[[str], AbstractContextManager[None]]] = {
 }
 
 
+# Telemetry collector pointer: when ``TELEMETRY_COLLECTOR_APP`` is set,
+# ``libs.telemetry`` exports to the collector Modal function (which fans out to
+# all providers) instead of a sink directly.
+_TELEMETRY_POINTER_KEYS = (
+    "TELEMETRY_COLLECTOR_APP",
+    "TELEMETRY_COLLECTOR_FUNCTION",
+)
+
+# Direct-sink telemetry creds (HyperDX + generic OTLP). Needed ONLY by the
+# no-collector baseline fallback in ``libs.telemetry``. When the collector is
+# enabled, app containers must NOT carry provider credentials — they reach
+# providers only through the collector — so these are withheld. The two
+# ``..._HEADERS`` vars are the standard OTel hook non-HyperDX sinks use to pass
+# custom auth (Datadog DD-API-KEY, Grafana Cloud basic, etc.).
+_OTEL_SINK_KEYS = (
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+    "HYPERDX_API_KEY",
+    "HYPERDX_OTLP_ENDPOINT",
+)
+
+
+def _telemetry_collector_enabled() -> bool:
+    """True when the telemetry collector is configured (collector mode)."""
+    return bool(os.environ.get("TELEMETRY_COLLECTOR_APP", "").strip())
+
+
+def _bootstrap_secret_payload() -> dict[str, str | None]:
+    """Build the bootstrap secret payload from the deploy-time host env.
+
+    Always carries Infisical creds + the telemetry collector pointer. The
+    direct-sink telemetry creds are included ONLY when the collector is off, so
+    a collector-enabled app container receives just the pointer and never a
+    provider credential.
+    """
+    payload: dict[str, str | None] = {
+        "INFISICAL_TOKEN": os.environ.get("INFISICAL_TOKEN", ""),
+        "INFISICAL_PROJECT_ID": os.environ.get("INFISICAL_PROJECT_ID", ""),
+    }
+    opts: tuple[str, ...] = (
+        "INFISICAL_HOST",
+        "INFISICAL_ENV",
+        *_TELEMETRY_POINTER_KEYS,
+    )
+    if not _telemetry_collector_enabled():
+        opts += _OTEL_SINK_KEYS
+    for opt in opts:
+        v = os.environ.get(opt, "").strip()
+        if v:
+            payload[opt] = v
+    return payload
+
+
 def bootstrap_secret() -> modal.Secret:
     """Build an inline Modal Secret carrying Infisical bootstrap creds.
 
@@ -69,31 +124,7 @@ def bootstrap_secret() -> modal.Secret:
     before deploy; at runtime, ``infisical.fetch_all`` will raise
     ``InfisicalAuthError`` if the token is empty.
     """
-    payload: dict[str, str | None] = {
-        "INFISICAL_TOKEN": os.environ.get("INFISICAL_TOKEN", ""),
-        "INFISICAL_PROJECT_ID": os.environ.get("INFISICAL_PROJECT_ID", ""),
-    }
-    # Optional Infisical + OTLP-sink env vars. The OTLP keys are picked up by
-    # ``libs.telemetry.init_log_exporter`` at container import; absent keys
-    # keep the sink disabled and stdout-only logging unchanged. The two
-    # ``..._HEADERS`` vars are the standard OTel hook non-HyperDX sinks use
-    # to pass custom auth (Datadog DD-API-KEY, Grafana Cloud basic, etc.) —
-    # the OTLPLogExporter reads them automatically when no explicit
-    # ``headers=`` is passed by ``init_log_exporter``.
-    for opt in (
-        "INFISICAL_HOST",
-        "INFISICAL_ENV",
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_HEADERS",
-        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
-        "HYPERDX_API_KEY",
-        "HYPERDX_OTLP_ENDPOINT",
-    ):
-        v = os.environ.get(opt, "").strip()
-        if v:
-            payload[opt] = v
-    return modal.Secret.from_dict(payload)
+    return modal.Secret.from_dict(_bootstrap_secret_payload())
 
 
 @contextmanager
