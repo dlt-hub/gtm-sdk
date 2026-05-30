@@ -128,7 +128,9 @@ ATTRIBUTES: tuple[AttrSpec, ...] = (
         "Relevance score",
         "relevance_score",
         "select",
-        seed_options=("high", "medium", "low"),
+        # "unknown" supports the Octolens CSV backfill (relevance not scored at
+        # export time). Seeded here for --diff parity; the writer JIT-creates it.
+        seed_options=("high", "medium", "low", "unknown"),
     ),
     AttrSpec("Relevance comment", "relevance_comment", "text"),
     AttrSpec("Primary keyword", "primary_keyword", "text"),

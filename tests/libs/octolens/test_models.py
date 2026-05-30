@@ -194,3 +194,39 @@ def test_camel_case_aliases() -> None:
     assert mention.source_id == "tweet_1"
     assert mention.author_avatar_url == "https://a"
     assert mention.author_profile_link == "https://p"
+
+
+def test_unknown_relevance_score_validates() -> None:
+    """The CSV backfill stamps relevance_score="unknown" (no score at export)."""
+    mention = Mention.model_validate(
+        {
+            "url": "https://test.com",
+            "body": "x",
+            "timestamp": "2026-05-10 11:55:53.000",
+            "source": "reddit",
+            "sourceId": "abc",
+            "author": "user",
+            "relevanceScore": "unknown",
+            "relevanceComment": "backfill",
+            "keyword": "dlthub",
+        },
+    )
+    assert mention.relevance_score == "unknown"
+
+
+def test_youtube_source_validates() -> None:
+    """youtube was added to the Source allow-list for the backfill."""
+    mention = Mention.model_validate(
+        {
+            "url": "https://youtube.com/watch?v=abc",
+            "body": "x",
+            "timestamp": "2026-05-10 11:55:53.000",
+            "source": "youtube",
+            "sourceId": "abc",
+            "author": "user",
+            "relevanceScore": "unknown",
+            "relevanceComment": "backfill",
+            "keyword": "dlthub",
+        },
+    )
+    assert mention.source == "youtube"

@@ -25,6 +25,9 @@ from pydantic import (
 # webhook validation will reject the payload — we want to hear about it
 # (loudly) rather than silently route mentions from an unknown platform.
 # Update this list deliberately after confirming the new platform's shape.
+# "youtube" was added deliberately for the historical CSV backfill
+# (scripts/octolens-backfill-mentions.py), which surfaced real dlt/dlthub
+# mentions from YouTube; the live webhook accepts it going forward too.
 Source = Literal[
     "bluesky",
     "dev",
@@ -34,9 +37,14 @@ Source = Literal[
     "podcasts",
     "reddit",
     "twitter",
+    "youtube",
 ]
 
-RelevanceScore = Literal["low", "medium", "high"]
+# "unknown" exists only for the historical CSV backfill: those exports carry no
+# relevance score, so backfilled mentions are stamped "unknown". It is NOT in
+# DEFAULT_FILTERS' excluded_scores (only "low" is dropped), so these mentions
+# still reach Attio. Live Octolens webhooks only ever send low/medium/high.
+RelevanceScore = Literal["low", "medium", "high", "unknown"]
 
 
 class Mention(BaseModel):

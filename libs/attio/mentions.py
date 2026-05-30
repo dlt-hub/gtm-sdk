@@ -34,8 +34,21 @@ def upsert_mention(input: MentionInput) -> ReliabilityEnvelope:
 
     The same value payload is used for create and update — see
     `build_mention_values` for why source identity fields are always sent.
+
+    No-downgrade rule: a CSV backfill (``src/octolens/backfill.py``) carries no
+    relevance opinion and stamps ``relevance_score="unknown"``; live Octolens
+    deliveries always send low/medium/high. So ``"unknown"`` means "do not write
+    relevance" — we drop ``relevance_score``/``relevance_comment`` from the
+    assert entirely. Attio leaves omitted attributes untouched, so an existing
+    live-scored value is preserved and a new record is left unscored. Omitting
+    the field (rather than reading the current value and conditionally writing)
+    is race-free: it can never overwrite a ``relevance_score`` a live webhook
+    writes concurrently.
     """
     values = build_mention_values(input)
+    if input.relevance_score == "unknown":
+        values.pop("relevance_score", None)
+        values.pop("relevance_comment", None)
     try:
         _ensure_option_vocabulary(input)
         with get_client() as client:
