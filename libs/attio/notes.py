@@ -1,4 +1,5 @@
 import sys
+import time
 from typing import Any
 
 from libs.attio.client import get_client
@@ -55,6 +56,46 @@ def _resolve_parent_record_id(
     )
 
 
+def resolve_record_id_for_ref(
+    *,
+    parent_object: str,
+    email: str | None = None,
+    domain: str | None = None,
+    attempts: int = 3,
+    backoff_seconds: float = 0.5,
+) -> str | None:
+    """Resolve a people/companies record_id by email or domain.
+
+    Returns ``None`` (rather than raising) when no record matches after all
+    attempts, so callers can branch on a miss. Used by the dispatcher when a
+    note's parent ref is not in the plan's LookupTable — e.g. the Fathom path,
+    where the ``/v2/meetings`` upsert auto-creates the participant Person
+    instead of emitting an explicit ``UpsertPerson`` op (ai-gez).
+
+    The lookup is a read-after-write: the record was typically just created by a
+    preceding ``/v2/meetings`` upsert, and Attio's record search can lag a beat
+    behind that write. Retry a bounded number of times with linear backoff
+    before treating a miss as final, so a brief propagation delay does not abort
+    the whole export. A permanent error (invalid parent_object, missing
+    email/domain) raises ``AttioValidationError`` and is not retried.
+    """
+    for attempt in range(attempts):
+        with get_client() as client:
+            try:
+                return _resolve_parent_record_id(
+                    client,
+                    parent_object,
+                    None,
+                    email,
+                    domain,
+                )
+            except AttioNotFoundError:
+                pass
+        if attempt + 1 < attempts:
+            time.sleep(backoff_seconds * (attempt + 1))
+    return None
+
+
 def _extract_result(note: Any) -> NoteResult:
     raw: dict[str, Any] = model_dump_or_empty(note)
     return NoteResult(
@@ -64,6 +105,7 @@ def _extract_result(note: Any) -> NoteResult:
         parent_record_id=note.parent_record_id,
         content_plaintext=note.content_plaintext,
         created_at=note.created_at,
+        meeting_id=getattr(note, "meeting_id", None),
         raw=raw,
     )
 
@@ -97,6 +139,8 @@ def add_note(input: NoteInput) -> NoteResult:
                 title=input.title,
                 format_=input.format,
                 content=input.content,
+                created_at=input.created_at,
+                meeting_id=input.meeting_id,
             ),
         )
 
@@ -108,12 +152,19 @@ def find_note_by_title(
     parent_object: str,
     parent_record_id: str,
     title: str,
+    meeting_id: str | None = None,
 ) -> str | None:
     """Return the note_id of an existing Note with this exact title on this parent.
 
     Linear scan of the parent's notes list; Attio does not expose a
     server-side title filter for Notes. Used by ``create_note`` for
     idempotency.
+
+    When ``meeting_id`` is given, the match is scoped to notes associated with
+    that meeting: a person/company parent accumulates notes across many
+    meetings, so title alone is not a unique key for a meeting-associated note
+    (ai-gez). When ``meeting_id`` is None, matches on title only (back-compat
+    for non-meeting notes).
     """
     with get_client() as client:
         response = client.notes.get_v2_notes(
@@ -121,8 +172,14 @@ def find_note_by_title(
             parent_record_id=parent_record_id,
         )
         for note in response.data:
-            if getattr(note, "title", None) == title:
-                return note.id.note_id
+            if getattr(note, "title", None) != title:
+                continue
+            if (
+                meeting_id is not None
+                and getattr(note, "meeting_id", None) != meeting_id
+            ):
+                continue
+            return note.id.note_id
     return None
 
 
@@ -167,6 +224,7 @@ def create_note(
         parent_object=input.parent_object,
         parent_record_id=input.parent_record_id,
         title=input.title,
+        meeting_id=input.meeting_id,
     )
     if existing is not None:
         return ReliabilityEnvelope(
@@ -189,6 +247,7 @@ def create_note(
                 format_=input.format,
                 content=input.content,
                 created_at=input.created_at,
+                meeting_id=input.meeting_id,
             ),
         )
         return ReliabilityEnvelope(
@@ -211,6 +270,14 @@ def update_note(note_id: str, input: NoteInput) -> NoteResult:
         title = input.title if input.title else note.title
         content = input.content if input.content else note.content_plaintext
         format_ = input.format
+        # Attio has no in-place note update, so we delete + recreate. Preserve
+        # the existing meeting association unless the caller overrides it,
+        # otherwise the recreate would silently drop it (ai-gez).
+        meeting_id = (
+            input.meeting_id
+            if input.meeting_id is not None
+            else getattr(note, "meeting_id", None)
+        )
 
         client.notes.delete_v2_notes_note_id_(note_id=note_id)
 
@@ -221,6 +288,7 @@ def update_note(note_id: str, input: NoteInput) -> NoteResult:
                 title=title,
                 format_=format_,
                 content=content,
+                meeting_id=meeting_id,
             ),
         )
 

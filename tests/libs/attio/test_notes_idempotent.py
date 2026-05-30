@@ -95,6 +95,150 @@ def test_create_note_preview_does_not_post() -> None:
     fake_client.notes.post_v2_notes.assert_not_called()
 
 
+def test_resolve_record_id_for_ref_retries_then_succeeds(monkeypatch) -> None:
+    # ai-gez: the participant Person was just auto-created by /v2/meetings, so
+    # Attio's record search can lag. A miss must retry before giving up.
+    empty = MagicMock()
+    empty.data = []
+    found = MagicMock()
+    found.data = [MagicMock()]
+    found.data[0].id.record_id = "person-late"
+    fake_client = MagicMock()
+    # First query lags (no data), second returns the record.
+    fake_client.records.post_v2_objects_object_records_query.side_effect = [
+        empty,
+        found,
+    ]
+
+    sleeps: list[float] = []
+    with (
+        patch("libs.attio.notes.get_client") as mock_ctx,
+        patch(
+            "libs.attio.notes.time.sleep",
+            side_effect=sleeps.append,
+        ),
+    ):
+        mock_ctx.return_value.__enter__.return_value = fake_client
+        from libs.attio.notes import resolve_record_id_for_ref
+
+        out = resolve_record_id_for_ref(parent_object="people", email="late@acme.com")
+
+    assert out == "person-late"
+    assert len(sleeps) == 1  # one backoff between the two attempts
+
+
+def test_resolve_record_id_for_ref_returns_none_after_attempts(monkeypatch) -> None:
+    empty = MagicMock()
+    empty.data = []
+    fake_client = MagicMock()
+    fake_client.records.post_v2_objects_object_records_query.return_value = empty
+
+    with (
+        patch("libs.attio.notes.get_client") as mock_ctx,
+        patch(
+            "libs.attio.notes.time.sleep",
+        ),
+    ):
+        mock_ctx.return_value.__enter__.return_value = fake_client
+        from libs.attio.notes import resolve_record_id_for_ref
+
+        out = resolve_record_id_for_ref(
+            parent_object="people",
+            email="never@acme.com",
+            attempts=2,
+        )
+
+    assert out is None
+    assert fake_client.records.post_v2_objects_object_records_query.call_count == 2
+
+
+def test_find_note_by_title_scopes_match_to_meeting_id() -> None:
+    # ai-gez: a shared parent accumulates same-titled notes across meetings, so
+    # a meeting-scoped lookup must ignore a same-title note from another meeting.
+    other_meeting = MagicMock()
+    other_meeting.title = "Action items"
+    other_meeting.meeting_id = "meet-OTHER"
+    other_meeting.id.note_id = "note-other"
+    this_meeting = MagicMock()
+    this_meeting.title = "Action items"
+    this_meeting.meeting_id = "meet-THIS"
+    this_meeting.id.note_id = "note-this"
+    fake_client = MagicMock()
+    fake_client.notes.get_v2_notes.return_value.data = [other_meeting, this_meeting]
+
+    with patch("libs.attio.notes.get_client") as mock_ctx:
+        mock_ctx.return_value.__enter__.return_value = fake_client
+        from libs.attio.notes import find_note_by_title
+
+        out = find_note_by_title(
+            parent_object="people",
+            parent_record_id="pid",
+            title="Action items",
+            meeting_id="meet-THIS",
+        )
+    assert out == "note-this"
+
+
+def test_find_note_by_title_meeting_scope_no_match_for_other_meeting() -> None:
+    existing = MagicMock()
+    existing.title = "Action items"
+    existing.meeting_id = "meet-OTHER"
+    existing.id.note_id = "note-other"
+    fake_client = MagicMock()
+    fake_client.notes.get_v2_notes.return_value.data = [existing]
+
+    with patch("libs.attio.notes.get_client") as mock_ctx:
+        mock_ctx.return_value.__enter__.return_value = fake_client
+        from libs.attio.notes import find_note_by_title
+
+        out = find_note_by_title(
+            parent_object="people",
+            parent_record_id="pid",
+            title="Action items",
+            meeting_id="meet-THIS",
+        )
+    assert out is None
+
+
+def test_create_note_threads_meeting_id_and_scopes_dedup() -> None:
+    # Existing same-title note belongs to a different meeting → must still POST,
+    # and the POST must carry the new meeting_id.
+    existing = MagicMock()
+    existing.title = "Action items"
+    existing.meeting_id = "meet-OTHER"
+    existing.id.note_id = "note-other"
+    fake_client = MagicMock()
+    fake_client.notes.get_v2_notes.return_value.data = [existing]
+    created = MagicMock()
+    created.id.note_id = "note-new"
+    captured: dict[str, object] = {}
+
+    def _spy(*_args: object, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return MagicMock(data=created)
+
+    fake_client.notes.post_v2_notes.side_effect = _spy
+
+    with patch("libs.attio.notes.get_client") as mock_ctx:
+        mock_ctx.return_value.__enter__.return_value = fake_client
+        from libs.attio.notes import create_note
+
+        envelope = create_note(
+            input=NoteInput(
+                parent_object="people",
+                parent_record_id="pid",
+                title="Action items",
+                content="body",
+                format="markdown",
+                meeting_id="meet-THIS",
+            ),
+            apply=True,
+        )
+    assert envelope.action == "created"
+    assert envelope.record_id == "note-new"
+    assert getattr(captured["data"], "meeting_id", None) == "meet-THIS"
+
+
 def test_create_note_passes_created_at_through_to_sdk_boundary() -> None:
     """The Notes API accepts created_at for backdating; verify it's wired."""
     fake_client = MagicMock()

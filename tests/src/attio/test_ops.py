@@ -36,13 +36,12 @@ def test_attio_op_union_dispatches_by_op_type() -> None:
     assert parsed.domain == "example.com"
 
 
-def test_ref_discriminator() -> None:
+def test_ref_excludes_meeting() -> None:
+    # ai-gez: a meeting can never be a note/record parent (Attio's Notes API
+    # rejects parent_object="meetings"), so MeetingRef is not part of Ref.
     adapter: TypeAdapter[Ref] = TypeAdapter(Ref)
-    parsed = adapter.validate_python(
-        {"ref_kind": "meeting", "ical_uid": "fathom-call-1"},
-    )
-    assert isinstance(parsed, MeetingRef)
-    assert parsed.ical_uid == "fathom-call-1"
+    with pytest.raises(ValidationError):
+        adapter.validate_python({"ref_kind": "meeting", "ical_uid": "fathom-call-1"})
 
 
 def test_ref_discriminator_person_and_company() -> None:
@@ -93,6 +92,30 @@ def test_upsert_note_carries_ref() -> None:
     )
     assert isinstance(op.parent, PersonRef)
     assert op.op_type == "upsert_note"
+    assert op.meeting is None
+
+
+def test_upsert_note_carries_meeting_association() -> None:
+    op = UpsertNote(
+        parent=PersonRef(attribute="email", value="a@b.com"),
+        meeting=MeetingRef(ical_uid="fathom-call-7"),
+        title="x",
+        content="y",
+    )
+    assert isinstance(op.meeting, MeetingRef)
+    assert op.meeting.ical_uid == "fathom-call-7"
+
+
+def test_upsert_note_rejects_meeting_as_parent() -> None:
+    # The parent union no longer admits MeetingRef (ai-gez).
+    with pytest.raises(ValidationError):
+        UpsertNote.model_validate(
+            {
+                "parent": {"ref_kind": "meeting", "ical_uid": "fathom-call-7"},
+                "title": "x",
+                "content": "y",
+            },
+        )
 
 
 def test_person_ref_generalized_shape_email() -> None:

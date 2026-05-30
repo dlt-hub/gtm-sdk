@@ -7,7 +7,13 @@ import orjson
 
 from libs.fathom.models import ActionItem, Assignee
 from libs.meetings import canonical_meeting_uid
-from src.attio.ops import UpsertNote, MeetingExternalRef, MeetingRef, UpsertMeeting
+from src.attio.ops import (
+    UpsertNote,
+    MeetingExternalRef,
+    MeetingRef,
+    PersonRef,
+    UpsertMeeting,
+)
 from src.fathom.webhook.call import Webhook
 
 
@@ -59,6 +65,14 @@ def test_attio_get_operations_falls_back_to_recorder_with_no_attendees() -> None
     assert len(op.participants) == 1
     assert op.participants[0].email_address == "host@dlthub.com"
     assert op.participants[0].is_organizer is True
+
+    # With no external invitee the note parent falls back to the recorder, so
+    # the summary/action-item notes still have a valid (non-meeting) parent.
+    note = plan[1]
+    assert isinstance(note, UpsertNote)
+    assert isinstance(note.parent, PersonRef)
+    assert note.parent.value == "host@dlthub.com"
+    assert isinstance(note.meeting, MeetingRef)
 
 
 def test_attio_is_valid_webhook_false_with_no_recording_id() -> None:
@@ -130,8 +144,13 @@ def test_plan_includes_summary_note() -> None:
 
     upsert = plan[0]
     assert isinstance(upsert, UpsertMeeting)
-    assert isinstance(note.parent, MeetingRef)
-    assert note.parent.ical_uid == upsert.external_ref.ical_uid
+    # ai-gez: the note is parented to the primary external participant and
+    # *associated* to the meeting via ``meeting`` (never parented to it).
+    assert isinstance(note.parent, PersonRef)
+    assert note.parent.attribute == "email"
+    assert note.parent.value == "external@example.com"
+    assert isinstance(note.meeting, MeetingRef)
+    assert note.meeting.ical_uid == upsert.external_ref.ical_uid
 
 
 def test_plan_skips_summary_when_missing() -> None:
@@ -172,8 +191,10 @@ def test_plan_includes_action_items_note() -> None:
 
     upsert = plan[0]
     assert isinstance(upsert, UpsertMeeting)
-    assert isinstance(note.parent, MeetingRef)
-    assert note.parent.ical_uid == upsert.external_ref.ical_uid
+    assert isinstance(note.parent, PersonRef)
+    assert note.parent.value == "external@example.com"
+    assert isinstance(note.meeting, MeetingRef)
+    assert note.meeting.ical_uid == upsert.external_ref.ical_uid
 
 
 def test_plan_skips_action_items_when_empty_list() -> None:

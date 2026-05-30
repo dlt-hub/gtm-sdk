@@ -1,11 +1,22 @@
 from __future__ import annotations
 
-from libs.fathom.models import ActionItem, Assignee
+from libs.fathom.models import ActionItem, Assignee, CalendarInvitee
 from src.fathom.utils import (
     build_meeting_description,
     fathom_summary_title,
     render_action_items_markdown,
+    select_note_parent_email,
 )
+
+
+def _invitee(*, email: str, is_external: bool) -> CalendarInvitee:
+    return CalendarInvitee(
+        email=email,
+        email_domain=email.split("@", 1)[-1],
+        is_external=is_external,
+        matched_speaker_display_name=None,
+        name=email.split("@", 1)[0],
+    )
 
 
 def _item(
@@ -140,3 +151,54 @@ def test_build_meeting_description_blank_summary_uses_title() -> None:
     # No https url → no watch link, but the recording id still anchors it.
     assert "🎥" not in desc
     assert "Fathom recording #123" in desc
+
+
+def test_select_note_parent_prefers_first_external_invitee() -> None:
+    invitees = [
+        _invitee(email="host@dlthub.com", is_external=False),
+        _invitee(email="buyer@acme.com", is_external=True),
+        _invitee(email="other@globex.com", is_external=True),
+    ]
+    email = select_note_parent_email(
+        calendar_invitees=invitees,
+        participant_emails=[i.email for i in invitees],
+        recorder_email="host@dlthub.com",
+    )
+    assert email == "buyer@acme.com"
+
+
+def test_select_note_parent_falls_back_to_recorder_when_no_external() -> None:
+    invitees = [_invitee(email="host@dlthub.com", is_external=False)]
+    email = select_note_parent_email(
+        calendar_invitees=invitees,
+        participant_emails=[i.email for i in invitees],
+        recorder_email="host@dlthub.com",
+    )
+    assert email == "host@dlthub.com"
+
+
+def test_select_note_parent_falls_back_to_recorder_with_no_invitees() -> None:
+    # No invitees → participants is just the recorder (the /v2/meetings fallback).
+    email = select_note_parent_email(
+        calendar_invitees=[],
+        participant_emails=["host@dlthub.com"],
+        recorder_email="host@dlthub.com",
+    )
+    assert email == "host@dlthub.com"
+
+
+def test_select_note_parent_uses_participant_when_recorder_absent() -> None:
+    # ai-gez regression (roborev): invitees present, none external, and the
+    # recorder is NOT among them. The recorder is therefore not a meeting
+    # participant and won't be auto-created — so the parent must be a real
+    # participant (the first invitee), never the unresolvable recorder.
+    invitees = [
+        _invitee(email="teammate@dlthub.com", is_external=False),
+        _invitee(email="other@dlthub.com", is_external=False),
+    ]
+    email = select_note_parent_email(
+        calendar_invitees=invitees,
+        participant_emails=[i.email for i in invitees],
+        recorder_email="absent-recorder@dlthub.com",
+    )
+    assert email == "teammate@dlthub.com"

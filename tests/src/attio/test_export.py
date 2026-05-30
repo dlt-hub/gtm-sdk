@@ -132,13 +132,14 @@ def test_execute_fail_fast(monkeypatch) -> None:
 
 def test_execute_unresolved_ref(monkeypatch) -> None:
     handler_note = MagicMock(
-        return_value=_fail("unresolved_ref: meeting:not-yet-created"),
+        return_value=_fail("unresolved_ref: person:not-yet-created"),
     )
     monkeypatch.setattr("src.attio.export.OP_HANDLERS", {UpsertNote: handler_note})
 
     plan = [
         UpsertNote(
-            parent=MeetingRef(ical_uid="not-yet-created"),
+            parent=PersonRef(attribute="email", value="missing@example.com"),
+            meeting=MeetingRef(ical_uid="not-yet-created"),
             title="x",
             content="y",
         ),
@@ -242,29 +243,39 @@ def test_handle_upsert_note_creates_when_title_missing(monkeypatch) -> None:
     assert call_input.content == "body"
 
 
-def test_handle_upsert_note_skips_when_title_exists(monkeypatch) -> None:
+def _existing_note(*, note_id: str, title: str, meeting_id: str | None) -> MagicMock:
+    note = MagicMock()
+    note.note_id = note_id
+    note.title = title
+    note.meeting_id = meeting_id
+    return note
+
+
+def test_handle_upsert_note_skips_when_title_and_meeting_match(monkeypatch) -> None:
     from src.attio.export import OP_HANDLERS
 
     _handle_upsert_note = OP_HANDLERS[UpsertNote]
 
+    person_op = UpsertPerson(matching_attribute="email", email="a@example.com")
     table = LookupTable()
+    table.record(person_op, "person-rec-1")
     table.record(_meeting("fathom-call-1"), "meet-rec-1")
 
-    existing = MagicMock()
-    existing.note_id = "note-existing"
-    existing.title = "Fathom summary"
-    list_notes_mock = MagicMock(return_value=[existing])
-    monkeypatch.setattr(
-        "src.attio.export.libs_list_notes_for_parent",
-        list_notes_mock,
+    existing = _existing_note(
+        note_id="note-existing",
+        title="Fathom summary",
+        meeting_id="meet-rec-1",
     )
+    list_notes_mock = MagicMock(return_value=[existing])
+    monkeypatch.setattr("src.attio.export.libs_list_notes_for_parent", list_notes_mock)
 
     add_note_mock = MagicMock()
     monkeypatch.setattr("src.attio.export.libs_add_note", add_note_mock)
 
     envelope = _handle_upsert_note(
         UpsertNote(
-            parent=MeetingRef(ical_uid="fathom-call-1"),
+            parent=PersonRef(attribute="email", value="a@example.com"),
+            meeting=MeetingRef(ical_uid="fathom-call-1"),
             title="Fathom summary",
             content="updated body that should be ignored on replay",
         ),
@@ -277,15 +288,65 @@ def test_handle_upsert_note_skips_when_title_exists(monkeypatch) -> None:
     add_note_mock.assert_not_called()
 
 
+def test_handle_upsert_note_creates_when_same_title_different_meeting(
+    monkeypatch,
+) -> None:
+    """A shared Person parent accumulates notes across meetings: a same-titled
+    note from a *different* meeting must NOT dedup away the new one (ai-gez)."""
+    from src.attio.export import OP_HANDLERS
+
+    _handle_upsert_note = OP_HANDLERS[UpsertNote]
+
+    table = LookupTable()
+    table.record(
+        UpsertPerson(matching_attribute="email", email="a@example.com"),
+        "person-rec-1",
+    )
+    table.record(_meeting("fathom-call-2"), "meet-rec-2")
+
+    # Existing note has the same title but belongs to a different meeting.
+    existing = _existing_note(
+        note_id="note-old",
+        title="Action items",
+        meeting_id="meet-rec-OTHER",
+    )
+    monkeypatch.setattr(
+        "src.attio.export.libs_list_notes_for_parent",
+        MagicMock(return_value=[existing]),
+    )
+    fake_result = MagicMock()
+    fake_result.note_id = "note-new"
+    add_note_mock = MagicMock(return_value=fake_result)
+    monkeypatch.setattr("src.attio.export.libs_add_note", add_note_mock)
+
+    envelope = _handle_upsert_note(
+        UpsertNote(
+            parent=PersonRef(attribute="email", value="a@example.com"),
+            meeting=MeetingRef(ical_uid="fathom-call-2"),
+            title="Action items",
+            content="c",
+        ),
+        table,
+    )
+
+    assert envelope.action == "created"
+    assert envelope.record_id == "note-new"
+    sent = add_note_mock.call_args.args[0]
+    assert sent.meeting_id == "meet-rec-2"
+    assert sent.format == "markdown"
+
+
 def test_handle_upsert_note_maps_ref_kind_to_parent_object(monkeypatch) -> None:
     from src.attio.export import OP_HANDLERS
 
     _handle_upsert_note = OP_HANDLERS[UpsertNote]
 
     company_op = UpsertCompany(domain="example.com")
+    person_op = UpsertPerson(matching_attribute="email", email="a@example.com")
     meeting_op = _meeting("fathom-call-7")
     table = LookupTable()
     table.record(company_op, "company-rec-1")
+    table.record(person_op, "person-rec-1")
     table.record(meeting_op, "meet-rec-7")
 
     monkeypatch.setattr(
@@ -298,16 +359,20 @@ def test_handle_upsert_note_maps_ref_kind_to_parent_object(monkeypatch) -> None:
     add_note_mock = MagicMock(return_value=fake_result)
     monkeypatch.setattr("src.attio.export.libs_add_note", add_note_mock)
 
+    # Person parent + meeting association -> people + meeting_id passthrough.
     _handle_upsert_note(
         UpsertNote(
-            parent=MeetingRef(ical_uid="fathom-call-7"),
+            parent=PersonRef(attribute="email", value="a@example.com"),
+            meeting=MeetingRef(ical_uid="fathom-call-7"),
             title="m",
             content="c",
         ),
         table,
     )
-    assert add_note_mock.call_args.args[0].parent_object == "meetings"
-    assert add_note_mock.call_args.args[0].parent_record_id == "meet-rec-7"
+    sent = add_note_mock.call_args.args[0]
+    assert sent.parent_object == "people"
+    assert sent.parent_record_id == "person-rec-1"
+    assert sent.meeting_id == "meet-rec-7"
 
     from src.attio.ops import CompanyRef
 
@@ -319,8 +384,83 @@ def test_handle_upsert_note_maps_ref_kind_to_parent_object(monkeypatch) -> None:
         ),
         table,
     )
-    assert add_note_mock.call_args.args[0].parent_object == "companies"
-    assert add_note_mock.call_args.args[0].parent_record_id == "company-rec-1"
+    sent = add_note_mock.call_args.args[0]
+    assert sent.parent_object == "companies"
+    assert sent.parent_record_id == "company-rec-1"
+    assert sent.meeting_id is None
+
+
+def test_handle_upsert_note_resolves_parent_via_query_when_table_misses(
+    monkeypatch,
+) -> None:
+    """Fathom emits no UpsertPerson; the /v2/meetings upsert auto-creates the
+    Person, so an unresolved table entry falls back to a live email lookup."""
+    from src.attio.export import OP_HANDLERS
+
+    _handle_upsert_note = OP_HANDLERS[UpsertNote]
+
+    table = LookupTable()
+    table.record(_meeting("fathom-call-9"), "meet-rec-9")
+
+    resolve_mock = MagicMock(return_value="person-autocreated")
+    monkeypatch.setattr("src.attio.export.libs_resolve_record_id_for_ref", resolve_mock)
+    monkeypatch.setattr(
+        "src.attio.export.libs_list_notes_for_parent",
+        MagicMock(return_value=[]),
+    )
+    fake_result = MagicMock()
+    fake_result.note_id = "note-z"
+    add_note_mock = MagicMock(return_value=fake_result)
+    monkeypatch.setattr("src.attio.export.libs_add_note", add_note_mock)
+
+    envelope = _handle_upsert_note(
+        UpsertNote(
+            parent=PersonRef(attribute="email", value="buyer@acme.com"),
+            meeting=MeetingRef(ical_uid="fathom-call-9"),
+            title="Fathom summary",
+            content="c",
+        ),
+        table,
+    )
+
+    assert envelope.action == "created"
+    resolve_mock.assert_called_once_with(parent_object="people", email="buyer@acme.com")
+    assert add_note_mock.call_args.args[0].parent_record_id == "person-autocreated"
+
+
+def test_handle_upsert_note_unresolved_meeting_returns_failed_envelope(
+    monkeypatch,
+) -> None:
+    from src.attio.export import OP_HANDLERS
+
+    _handle_upsert_note = OP_HANDLERS[UpsertNote]
+
+    table = LookupTable()
+    table.record(
+        UpsertPerson(matching_attribute="email", email="a@example.com"),
+        "person-rec-1",
+    )
+
+    list_notes_mock = MagicMock()
+    monkeypatch.setattr("src.attio.export.libs_list_notes_for_parent", list_notes_mock)
+    add_note_mock = MagicMock()
+    monkeypatch.setattr("src.attio.export.libs_add_note", add_note_mock)
+
+    envelope = _handle_upsert_note(
+        UpsertNote(
+            parent=PersonRef(attribute="email", value="a@example.com"),
+            meeting=MeetingRef(ical_uid="never-created"),
+            title="m",
+            content="c",
+        ),
+        table,
+    )
+
+    assert envelope.success is False
+    assert envelope.errors[0].code == "unresolved_ref"
+    assert "meeting" in envelope.errors[0].message
+    list_notes_mock.assert_not_called()
+    add_note_mock.assert_not_called()
 
 
 def test_handle_upsert_note_unresolved_ref_returns_failed_envelope(monkeypatch) -> None:
@@ -335,6 +475,11 @@ def test_handle_upsert_note_unresolved_ref_returns_failed_envelope(monkeypatch) 
     )
     add_note_mock = MagicMock()
     monkeypatch.setattr("src.attio.export.libs_add_note", add_note_mock)
+    # Not in the table and the live email lookup also misses → unresolved.
+    monkeypatch.setattr(
+        "src.attio.export.libs_resolve_record_id_for_ref",
+        MagicMock(return_value=None),
+    )
 
     envelope = _handle_upsert_note(
         UpsertNote(

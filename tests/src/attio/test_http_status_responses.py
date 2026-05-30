@@ -57,6 +57,44 @@ def test_note_update_http_infers_401_from_error_message(monkeypatch) -> None:
     assert body["errors"][0]["code"] == "unknown_error"
 
 
+def test_note_add_forwards_meeting_id_to_note_input(monkeypatch) -> None:
+    # ai-gez: the HTTP/Modal note-add surface must forward meeting_id so callers
+    # can create meeting-associated notes, not silently-plain ones.
+    captured: dict[str, object] = {}
+
+    def _capture(note_input):  # noqa: ANN001, ANN202
+        captured["meeting_id"] = note_input.meeting_id
+        captured["parent_object"] = note_input.parent_object
+        return modal_notes.NoteResult(
+            note_id="note-1",
+            title=note_input.title,
+            parent_object=note_input.parent_object,
+            parent_record_id=note_input.parent_record_id or "rec-1",
+            content_plaintext=note_input.content,
+            created_at="2026-05-29T00:00:00Z",
+            meeting_id=note_input.meeting_id,
+        )
+
+    monkeypatch.setattr(modal_notes, "add_note", _capture)
+
+    fn = cast(modal.Function, modal_notes.attio_add_note)  # type: ignore
+    result = fn.local(
+        payload=modal_notes.NoteAddQuery(
+            title="Action items",
+            content="body",
+            parent_object="people",
+            record_id="rec-1",
+            format="markdown",
+            meeting_id="meet-123",
+        ).model_dump(),
+        api_keys={"attio_api_key": "ak"},
+    )
+
+    assert captured["meeting_id"] == "meet-123"
+    assert captured["parent_object"] == "people"
+    assert cast(modal_notes.NoteResult, result).meeting_id == "meet-123"
+
+
 def test_person_add_http_returns_non_2xx_when_envelope_failed(monkeypatch) -> None:
     def _failed_envelope(**_kwargs):
         return {

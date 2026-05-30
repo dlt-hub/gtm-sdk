@@ -61,6 +61,7 @@ def build_post_note_request(
     format_: str,
     content: str,
     created_at: datetime | None = None,
+    meeting_id: str | None = None,
 ) -> object:
     """Build the Notes POST request body.
 
@@ -69,6 +70,12 @@ def build_post_note_request(
     (documented Attio behavior: "if you wish to backdate a note for
     migration or other purposes, you can override with a custom
     ``created_at`` value").
+
+    ``meeting_id`` is optional; when set, the note is associated with an
+    existing Attio Meeting (the Notes API's ``meeting_id`` field). This is the
+    only supported way to attach a note to a meeting — meetings cannot be a
+    note's ``parent_object`` (ai-gez). Omitted when None so the SDK's ``UNSET``
+    default applies (no association).
     """
     models = _import_attio_models_module()
     constructor = getattr(models, "PostV2NotesData")
@@ -83,6 +90,8 @@ def build_post_note_request(
         # The SDK accepts either a string or a datetime; pass an ISO string
         # to avoid any timezone normalization surprises.
         kwargs["created_at"] = created_at.isoformat()
+    if meeting_id is not None:
+        kwargs["meeting_id"] = meeting_id
     return constructor(**kwargs)
 
 

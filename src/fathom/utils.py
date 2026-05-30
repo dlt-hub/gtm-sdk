@@ -7,7 +7,7 @@ from typing import Any
 import flatsplode
 import orjson
 
-from libs.fathom.models import ActionItem
+from libs.fathom.models import ActionItem, CalendarInvitee
 
 
 def clean_timestamp(dt: datetime) -> str:
@@ -177,3 +177,36 @@ def fathom_summary_title(template_name: str | None) -> str:
     if not name:
         return "Fathom summary"
     return f"Fathom summary — {name}"
+
+
+def select_note_parent_email(
+    *,
+    calendar_invitees: list[CalendarInvitee],
+    participant_emails: list[str],
+    recorder_email: str,
+) -> str:
+    """Pick the email of the Person that Fathom notes should hang off.
+
+    Attio notes cannot be parented to a meeting (ai-gez), so the summary /
+    action-item notes hang off a Person record and are associated to the
+    meeting via ``meeting_id``. The ``/v2/meetings`` upsert auto-creates a
+    Person only for the emails it receives in ``participants`` — so the parent
+    MUST be one of ``participant_emails``, or the dispatcher cannot resolve it
+    and the whole export fails. ``participant_emails`` is never empty: it is the
+    calendar invitees, or the recorder as the sole fallback participant.
+
+    Preference order, all constrained to the participant set:
+    1. the first **external** invitee (the prospect/customer the call is about),
+    2. else the recorder (internal host) when present,
+    3. else the first participant.
+    """
+    for invitee in calendar_invitees:
+        if (
+            invitee.is_external
+            and invitee.email.strip()
+            and invitee.email in participant_emails
+        ):
+            return invitee.email
+    if recorder_email in participant_emails:
+        return recorder_email
+    return participant_emails[0]

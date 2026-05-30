@@ -48,8 +48,14 @@ class MeetingRef(BaseModel):
     ical_uid: str
 
 
+# A note/record reference always resolves to a *standard object* record
+# (person or company). Meetings are deliberately excluded: Attio's Notes API
+# rejects ``parent_object="meetings"`` (a meeting is a first-class
+# ``/v2/meetings`` resource, not an object), so a note can never be *parented*
+# to a meeting — it is only *associated* via ``UpsertNote.meeting`` /
+# ``meeting_id``. See ai-gez and the Step 0 probe.
 Ref = Annotated[
-    Union[PersonRef, CompanyRef, MeetingRef],
+    Union[PersonRef, CompanyRef],
     Field(discriminator="ref_kind"),
 ]
 
@@ -146,7 +152,15 @@ class UpsertNote(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     op_type: Literal["upsert_note"] = "upsert_note"
+    # The note hangs off a standard-object record (person/company). Attio's
+    # Notes API requires ``parent_object`` to be an object slug/ID, so a
+    # meeting can never be the parent (ai-gez).
     parent: Ref
+    # Optional association to an Attio Meeting. The dispatcher resolves this
+    # ``MeetingRef`` against the plan's LookupTable (the ``UpsertMeeting`` runs
+    # earlier) and passes the meeting's record_id as the Notes API's
+    # ``meeting_id`` field, so the note also surfaces on the meeting timeline.
+    meeting: MeetingRef | None = None
     title: str
     content: str
 

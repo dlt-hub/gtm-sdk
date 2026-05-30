@@ -41,6 +41,9 @@ from libs.attio.notes import (
 from libs.attio.notes import (
     list_notes_for_parent as libs_list_notes_for_parent,
 )
+from libs.attio.notes import (
+    resolve_record_id_for_ref as libs_resolve_record_id_for_ref,
+)
 from libs.attio.people import (
     get_person_values,
     upsert_person as libs_upsert_person,
@@ -322,53 +325,107 @@ def _handle_upsert_meeting(
     )
 
 
+# Notes hang off a *standard object* record. Meetings are deliberately absent:
+# Attio's Notes API rejects ``parent_object="meetings"`` (a meeting is not an
+# object), so a meeting can only be *associated* via ``meeting_id`` — never be a
+# parent. See ai-gez and the Ref union in ``src/attio/ops.py``.
 _REF_KIND_TO_PARENT_OBJECT: dict[str, str] = {
     "person": "people",
     "company": "companies",
-    "meeting": "meetings",
 }
+
+
+def _unresolved_ref_envelope(label: str, detail: str) -> ReliabilityEnvelope:
+    return ReliabilityEnvelope(
+        success=False,
+        partial_success=False,
+        action="failed",
+        record_id=None,
+        errors=[
+            ErrorEntry(
+                code="unresolved_ref",
+                message=f"could not resolve {label}:{detail}",
+                error_type="UnresolvedRefError",
+                fatal=True,
+            ),
+        ],
+        warnings=[],
+        skipped_fields=[],
+        meta={"output_schema_version": "v1"},
+    )
+
+
+def _resolve_note_parent_record_id(
+    parent: PersonRef | CompanyRef,
+    table: LookupTable,
+) -> str | None:
+    """Resolve a note's parent record_id, falling back to a live Attio query.
+
+    Prefer the plan's LookupTable (a prior ``UpsertPerson``/``UpsertCompany``
+    in the same plan). When the parent was not created explicitly in this plan
+    — the Fathom case, where ``/v2/meetings`` auto-creates the participant
+    Person — resolve it by email/domain. ``PersonRef`` identities other than
+    ``email`` (linkedin/github_handle) cannot be resolved this way and return
+    ``None``.
+    """
+    resolved = table.resolve(parent)
+    if resolved is not None:
+        return resolved
+    if isinstance(parent, PersonRef) and parent.attribute == "email":
+        return libs_resolve_record_id_for_ref(
+            parent_object="people",
+            email=parent.value,
+        )
+    if isinstance(parent, CompanyRef):
+        return libs_resolve_record_id_for_ref(
+            parent_object="companies",
+            domain=parent.domain,
+        )
+    return None
 
 
 def _handle_upsert_note(
     op: UpsertNote,
     table: LookupTable,
 ) -> ReliabilityEnvelope:
-    parent_record_id = table.resolve(op.parent)
-    if parent_record_id is None:
-        return ReliabilityEnvelope(
-            success=False,
-            partial_success=False,
-            action="failed",
-            record_id=None,
-            errors=[
-                ErrorEntry(
-                    code="unresolved_ref",
-                    message=(
-                        f"could not resolve {op.parent.ref_kind}:"
-                        f"{op.parent.model_dump()}"
-                    ),
-                    error_type="UnresolvedRefError",
-                    fatal=True,
-                ),
-            ],
-            warnings=[],
-            skipped_fields=[],
-            meta={"output_schema_version": "v1"},
-        )
-
     parent_object = _REF_KIND_TO_PARENT_OBJECT[op.parent.ref_kind]
 
-    # Idempotency: Attio has no native upsert for notes and no natural key,
-    # so skip creation when a note with the same title already exists on the
-    # parent. Titles emitted by webhook producers are deterministic per note
-    # kind (e.g. "Fathom summary — Sales Discovery", "Action items"), so an
-    # exact-title match is a reliable replay signal.
+    parent_record_id = _resolve_note_parent_record_id(op.parent, table)
+    if parent_record_id is None:
+        return _unresolved_ref_envelope(op.parent.ref_kind, str(op.parent.model_dump()))
+
+    # Resolve the optional Meeting association. The ``UpsertMeeting`` runs
+    # earlier in the same plan, so its record_id is in the table; a set-but-
+    # unresolved meeting is a plan-ordering bug, not a recoverable miss.
+    meeting_record_id: str | None = None
+    if op.meeting is not None:
+        meeting_record_id = table.resolve(op.meeting)
+        if meeting_record_id is None:
+            return _unresolved_ref_envelope("meeting", str(op.meeting.model_dump()))
+
+    # Idempotency: Attio has no native upsert for notes and no natural key, so
+    # skip creation when a matching note already exists on the parent. Titles
+    # emitted by webhook producers are deterministic per note kind (e.g.
+    # "Fathom summary — Sales Discovery", "Action items"). Because the parent is
+    # now a person/company shared across many meetings, title alone is not
+    # unique — scope the replay check to the associated meeting via meeting_id.
+    #
+    # Rollout safety (ai-gez): this new (title, meeting_id) key cannot duplicate
+    # any *pre-existing* notes. Before this change the only producer of these
+    # titles was the Fathom transform, which parented notes to "meetings" — a
+    # request Attio rejects with HTTP 400, so those notes never persisted. There
+    # is therefore no legacy person-parented Fathom note (with meeting_id unset)
+    # for the scoped match to miss. Notes the new code writes always carry
+    # meeting_id (verified against prod), and non-meeting callers pass
+    # op.meeting is None and keep the original title-only dedup below.
     existing = libs_list_notes_for_parent(
         parent_object=parent_object,
         parent_record_id=parent_record_id,
     )
     for note in existing:
-        if note.title == op.title:
+        if note.title == op.title and (
+            op.meeting is None or note.meeting_id == meeting_record_id
+        ):
             return ReliabilityEnvelope(
                 success=True,
                 partial_success=False,
@@ -386,6 +443,10 @@ def _handle_upsert_note(
             content=op.content,
             parent_object=parent_object,
             parent_record_id=parent_record_id,
+            meeting_id=meeting_record_id,
+            # Webhook producers (Fathom) emit markdown summaries / checklists;
+            # render them as rich text rather than escaped plaintext.
+            format="markdown",
         ),
     )
     return ReliabilityEnvelope(

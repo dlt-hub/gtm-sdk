@@ -20,6 +20,7 @@ from src.fathom.utils import (
     build_meeting_description,
     fathom_summary_title,
     render_action_items_markdown,
+    select_note_parent_email,
     generate_gcs_filename,
     recording_to_jsonl,
 )
@@ -120,6 +121,7 @@ class Webhook(FathomWebhook):
             MeetingExternalRef,
             MeetingParticipant,
             MeetingRef,
+            PersonRef,
             UpsertMeeting,
         )
 
@@ -158,6 +160,21 @@ class Webhook(FathomWebhook):
             host_email=self.recorded_by.email,
             start=self.scheduled_start_time,
         )
+        # Attio notes cannot be parented to a meeting (ai-gez): a note hangs off
+        # a standard-object record and is *associated* to the meeting via
+        # ``meeting_id``. Parent the summary / action-item notes to the call's
+        # primary external participant (or the recorder, as a fallback), and
+        # attach the meeting via ``UpsertNote.meeting``.
+        note_parent = PersonRef(
+            attribute="email",
+            value=select_note_parent_email(
+                calendar_invitees=self.calendar_invitees,
+                # Constrain the parent to emails /v2/meetings will auto-create.
+                participant_emails=[p.email_address for p in participants],
+                recorder_email=self.recorded_by.email,
+            ),
+        )
+        note_meeting = MeetingRef(ical_uid=ical_uid)
         ops: list[Any] = [
             UpsertMeeting(
                 external_ref=MeetingExternalRef(
@@ -177,7 +194,8 @@ class Webhook(FathomWebhook):
         if self.default_summary and self.default_summary.markdown_formatted.strip():
             ops.append(
                 UpsertNote(
-                    parent=MeetingRef(ical_uid=ical_uid),
+                    parent=note_parent,
+                    meeting=note_meeting,
                     title=fathom_summary_title(self.default_summary.template_name),
                     content=self.default_summary.markdown_formatted,
                 ),
@@ -188,7 +206,8 @@ class Webhook(FathomWebhook):
             if rendered.strip():
                 ops.append(
                     UpsertNote(
-                        parent=MeetingRef(ical_uid=ical_uid),
+                        parent=note_parent,
+                        meeting=note_meeting,
                         title="Action items",
                         content=rendered,
                     ),

@@ -28,6 +28,7 @@ def attio_add_note(
                 parent_email=query.email,
                 parent_domain=query.domain,
                 format=query.format,
+                meeting_id=query.meeting_id,
             ),
         )
 
@@ -47,6 +48,7 @@ def attio_update_note(
                 content=query.content or "",
                 parent_object="",
                 format=query.format,
+                meeting_id=query.meeting_id,
             ),
         )
 
@@ -64,6 +66,10 @@ class NoteAddQuery(BaseModel):
     email: str | None = None
     domain: str | None = None
     format: str = "plaintext"
+    # Optional Attio Meeting association (Notes API ``meeting_id``). The note
+    # still hangs off ``parent_object``/record; this only attaches it to a
+    # meeting so it surfaces on the meeting timeline too (ai-gez).
+    meeting_id: str | None = None
 
 
 class NoteUpdateQuery(BaseModel):
@@ -73,6 +79,9 @@ class NoteUpdateQuery(BaseModel):
     title: str | None = None
     content: str | None = None
     format: str = "plaintext"
+    # Override the meeting association on rewrite; when omitted, update_note
+    # preserves whatever the existing note had (ai-gez).
+    meeting_id: str | None = None
 
 
 # HTTP endpoint wrappers

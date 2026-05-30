@@ -14,7 +14,9 @@ This reuses the live webhook's transform (``src/fathom/webhook/call.py``) and op
 dispatcher (``src/attio/export.py``) verbatim — no forked mapping logic.
 
 Idempotency: ``UpsertMeeting`` is keyed on the canonical ical_uid (find-or-create)
-and ``UpsertNote`` is deduped by exact title in ``src/attio/export.py``, so
+and ``UpsertNote`` is deduped by (title, meeting_id) on the parent Person in
+``src/attio/export.py`` — the note hangs off a participant and is associated to
+the meeting via ``meeting_id`` (meetings cannot be a note parent; see ai-gez), so
 re-running is safe (no duplicate meetings or notes). This also makes recovery
 trivial when a transient Fathom 5xx aborts a run mid-pagination: just re-run —
 already-written records become no-ops.
@@ -109,7 +111,11 @@ def _describe_op(op: Any) -> str:
             f"start={op.start} title={op.title!r}"
         )
     if isinstance(op, UpsertNote):
-        return f"upsert_note title={op.title!r} parent={op.parent.model_dump()}"
+        meeting = op.meeting.model_dump() if op.meeting else None
+        return (
+            f"upsert_note title={op.title!r} parent={op.parent.model_dump()} "
+            f"meeting={meeting}"
+        )
     return f"{op.op_type} {op.model_dump()}"
 
 

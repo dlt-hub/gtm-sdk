@@ -28,4 +28,9 @@ class NoteResult(BaseModel):
     parent_record_id: str
     content_plaintext: str
     created_at: str
+    # The Meeting this note is associated with, if any (Attio Notes API
+    # ``meeting_id``). Used for meeting-scoped idempotency: a shared
+    # person/company parent accumulates notes across many meetings, so dedup
+    # keys on (title, meeting_id) — see ai-gez.
+    meeting_id: str | None = None
     raw: dict[str, Any] = {}

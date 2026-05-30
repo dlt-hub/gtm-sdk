@@ -18,9 +18,10 @@ FIXTURE = Path("api/samples/fathom.recording.redacted.json")
 
 
 class _StubNote:
-    def __init__(self, note_id: str, title: str) -> None:
+    def __init__(self, note_id: str, title: str, meeting_id: str | None) -> None:
         self.note_id = note_id
         self.title = title
+        self.meeting_id = meeting_id
 
 
 def _meeting_envelope(record_id: str) -> ReliabilityEnvelope:
@@ -65,11 +66,14 @@ def test_replay_does_not_create_duplicate_notes(monkeypatch) -> None:
 
     def fake_add_note(note_input):  # noqa: ANN001, ANN202
         note_id = next(next_note_id)
-        note = _StubNote(note_id=note_id, title=note_input.title)
+        note = _StubNote(
+            note_id=note_id,
+            title=note_input.title,
+            meeting_id=note_input.meeting_id,
+        )
         stored_notes.setdefault(note_input.parent_record_id, []).append(note)
         add_calls.append((note_input.parent_record_id, note_input.title))
-        result = _StubNote(note_id=note_id, title=note_input.title)
-        return result
+        return note
 
     monkeypatch.setattr(
         "src.attio.export.find_or_create_meeting",
@@ -80,6 +84,16 @@ def test_replay_does_not_create_duplicate_notes(monkeypatch) -> None:
         fake_list_notes,
     )
     monkeypatch.setattr("src.attio.export.libs_add_note", fake_add_note)
+
+    # Fathom emits no UpsertPerson op — the participant Person is auto-created by
+    # the /v2/meetings upsert — so the note parent resolves via a live lookup.
+    def fake_resolve_record_id(**_kwargs: str) -> str:  # noqa: ANN003 handled by **_kwargs
+        return "person-rec-1"
+
+    monkeypatch.setattr(
+        "src.attio.export.libs_resolve_record_id_for_ref",
+        fake_resolve_record_id,
+    )
 
     # First delivery: notes are created.
     first = execute(plan)
