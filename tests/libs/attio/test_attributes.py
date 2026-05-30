@@ -5,8 +5,14 @@ from types import SimpleNamespace
 import pytest
 from attio.errors.sdkerror import SDKError
 
-from libs.attio.attributes import create_companies_attribute, ensure_select_options
-from libs.attio.models import AttributeCreateResult
+from libs.attio.attributes import (
+    create_companies_attribute,
+    ensure_select_options,
+    list_attributes,
+    list_select_options,
+    list_status_options,
+)
+from libs.attio.models import AttributeCreateResult, AttributeInfo
 
 
 def _resp(data):
@@ -207,3 +213,220 @@ def test_ensure_select_options_skips_existing(monkeypatch) -> None:
 
     assert created == ["kw_b"]
     assert fake.created_options == [{"title": "kw_b"}]
+
+
+# --- read helpers (list_attributes / list_select_options / list_status_options) ---
+
+
+def _live_attr(
+    slug: str,
+    attribute_type: str = "text",
+    *,
+    title: str | None = None,
+    is_multiselect: bool = False,
+    is_unique: bool = False,
+    is_required: bool = False,
+    is_archived: bool = False,
+    is_system_attribute: bool = False,
+    allowed_object_ids: list[str] | None = None,
+):
+    config = SimpleNamespace(
+        record_reference=SimpleNamespace(allowed_object_ids=allowed_object_ids),
+    )
+    return SimpleNamespace(
+        api_slug=slug,
+        title=title or slug,
+        type=attribute_type,
+        is_multiselect=is_multiselect,
+        is_unique=is_unique,
+        is_required=is_required,
+        is_archived=is_archived,
+        is_system_attribute=is_system_attribute,
+        config=config,
+    )
+
+
+def _live_object(object_id: str, api_slug: str):
+    return SimpleNamespace(id=SimpleNamespace(object_id=object_id), api_slug=api_slug)
+
+
+class _FakeReadAttributes:
+    def __init__(self, attrs, *, options=None, statuses=None, attrs_error=None):
+        self.attrs = attrs
+        self.options = options or {}
+        self.statuses = statuses or {}
+        self.attrs_error = attrs_error
+
+    def get_v2_target_identifier_attributes(self, *, target, identifier):
+        assert target == "objects"
+        del identifier
+        if self.attrs_error is not None:
+            raise self.attrs_error
+        return _resp(self.attrs)
+
+    def get_v2_target_identifier_attributes_attribute_options(
+        self,
+        *,
+        target,
+        identifier,
+        attribute,
+    ):
+        assert target == "objects"
+        del identifier
+        return _resp(
+            [SimpleNamespace(title=t) for t in self.options.get(attribute, [])],
+        )
+
+    def get_v2_target_identifier_attributes_attribute_statuses(
+        self,
+        *,
+        target,
+        identifier,
+        attribute,
+    ):
+        assert target == "objects"
+        del identifier
+        return _resp(
+            [SimpleNamespace(title=t) for t in self.statuses.get(attribute, [])],
+        )
+
+
+class _FakeObjects:
+    def __init__(self, objects):
+        self.objects = objects
+        self.calls = 0
+
+    def get_v2_objects(self):
+        self.calls += 1
+        return _resp(self.objects)
+
+
+class _FakeReadClient:
+    def __init__(self, attributes, objects=None):
+        self.attributes = attributes
+        self.objects = objects if objects is not None else _FakeObjects([])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        return False
+
+
+def test_list_attributes_normalizes_fields_and_keeps_archived(monkeypatch) -> None:
+    attrs = _FakeReadAttributes(
+        attrs=[
+            _live_attr("mention_url", "text", is_unique=True),
+            _live_attr("keywords", "select", is_multiselect=True),
+            _live_attr("record_id", "text", is_system_attribute=True),
+            _live_attr("legacy", "text", is_archived=True),
+            _live_attr("locked", "text", is_required=True),
+        ],
+    )
+    objects = _FakeObjects([])
+    monkeypatch.setattr(
+        "libs.attio.attributes.get_client",
+        lambda: _FakeReadClient(attrs, objects),
+    )
+
+    result = list_attributes("social_mention")
+
+    assert all(isinstance(a, AttributeInfo) for a in result)
+    by_slug = {a.api_slug: a for a in result}
+    assert by_slug["mention_url"].is_unique is True
+    assert by_slug["keywords"].is_multiselect is True
+    assert by_slug["record_id"].is_system is True
+    assert by_slug["locked"].is_required is True
+    # Archived attributes are returned (callers decide whether to filter).
+    assert by_slug["legacy"].is_archived is True
+    # No record-reference present -> no objects lookup paid for.
+    assert objects.calls == 0
+
+
+def test_list_attributes_resolves_record_reference_slugs(monkeypatch) -> None:
+    attrs = _FakeReadAttributes(
+        attrs=[
+            _live_attr(
+                "related_person",
+                "record-reference",
+                allowed_object_ids=["obj_people"],
+            ),
+        ],
+    )
+    objects = _FakeObjects([_live_object("obj_people", "people")])
+    monkeypatch.setattr(
+        "libs.attio.attributes.get_client",
+        lambda: _FakeReadClient(attrs, objects),
+    )
+
+    result = list_attributes("social_mention")
+
+    assert result[0].allowed_objects == ("people",)
+    assert objects.calls == 1
+
+
+def test_list_attributes_falls_back_to_raw_id_when_slug_unresolved(monkeypatch) -> None:
+    attrs = _FakeReadAttributes(
+        attrs=[
+            _live_attr(
+                "related_person",
+                "record-reference",
+                allowed_object_ids=["obj_orphan"],
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        "libs.attio.attributes.get_client",
+        lambda: _FakeReadClient(attrs, _FakeObjects([])),
+    )
+
+    result = list_attributes("social_mention")
+
+    assert result[0].allowed_objects == ("obj_orphan",)
+
+
+def test_list_attributes_returns_empty_on_404(monkeypatch) -> None:
+    attrs = _FakeReadAttributes(attrs=[], attrs_error=_make_sdk_error(404, "no object"))
+    monkeypatch.setattr(
+        "libs.attio.attributes.get_client",
+        lambda: _FakeReadClient(attrs),
+    )
+
+    assert list_attributes("social_mention") == []
+
+
+def test_list_attributes_reraises_non_404(monkeypatch) -> None:
+    attrs = _FakeReadAttributes(attrs=[], attrs_error=_make_sdk_error(500, "boom"))
+    monkeypatch.setattr(
+        "libs.attio.attributes.get_client",
+        lambda: _FakeReadClient(attrs),
+    )
+
+    with pytest.raises(SDKError):
+        list_attributes("social_mention")
+
+
+def test_list_select_options_returns_titles(monkeypatch) -> None:
+    attrs = _FakeReadAttributes(attrs=[], options={"relevance_score": ["high", "low"]})
+    monkeypatch.setattr(
+        "libs.attio.attributes.get_client",
+        lambda: _FakeReadClient(attrs),
+    )
+
+    assert list_select_options(
+        target_object="social_mention",
+        attribute_slug="relevance_score",
+    ) == ["high", "low"]
+
+
+def test_list_status_options_returns_titles(monkeypatch) -> None:
+    attrs = _FakeReadAttributes(attrs=[], statuses={"triage_status": ["New", "Done"]})
+    monkeypatch.setattr(
+        "libs.attio.attributes.get_client",
+        lambda: _FakeReadClient(attrs),
+    )
+
+    assert list_status_options(
+        target_object="social_mention",
+        attribute_slug="triage_status",
+    ) == ["New", "Done"]

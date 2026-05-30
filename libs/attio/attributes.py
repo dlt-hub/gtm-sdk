@@ -3,7 +3,106 @@ from __future__ import annotations
 from attio.errors.sdkerror import SDKError
 
 from libs.attio.client import get_client
-from libs.attio.models import AttributeCreateResult
+from libs.attio.models import AttributeCreateResult, AttributeInfo
+
+
+def list_attributes(target_object: str) -> list[AttributeInfo]:
+    """Return the non-archived attributes on ``target_object``.
+
+    Read-only. Powers live-vs-declared schema diffing (see
+    ``scripts/attio-bootstrap-social_mentions.py --diff``). For
+    ``record-reference`` attributes the wire format returns target object *IDs*;
+    this resolves them back to api_slugs via a single ``get_v2_objects`` lookup
+    so callers can compare against slug-based declarations. Returns ``[]`` when
+    the object does not exist yet (404), mirroring :func:`create_attribute`.
+    """
+    with get_client() as client:
+        try:
+            response = client.attributes.get_v2_target_identifier_attributes(
+                target="objects",
+                identifier=target_object,
+            )
+        except SDKError as exc:
+            status = getattr(getattr(exc, "raw_response", None), "status_code", None)
+            if status != 404:
+                raise
+            return []
+
+        attrs = list(response.data)
+        # Only pay for the objects lookup when a record-reference attribute is
+        # present — the common case (text/select/etc.) needs no id->slug map.
+        id_to_slug: dict[str, str] = {}
+        if any(getattr(a, "type", "") == "record-reference" for a in attrs):
+            objects_response = client.objects.get_v2_objects()
+            for obj in objects_response.data:
+                obj_id = getattr(getattr(obj, "id", None), "object_id", None)
+                slug = getattr(obj, "api_slug", None)
+                if obj_id and slug:
+                    id_to_slug[obj_id] = slug
+
+        result: list[AttributeInfo] = []
+        for a in attrs:
+            allowed: tuple[str, ...] = ()
+            if getattr(a, "type", "") == "record-reference":
+                record_reference = getattr(
+                    getattr(a, "config", None),
+                    "record_reference",
+                    None,
+                )
+                allowed_ids = (
+                    getattr(record_reference, "allowed_object_ids", None) or []
+                )
+                # Fall back to the raw id if a slug can't be resolved, so the
+                # diff still surfaces *something* rather than silently dropping.
+                allowed = tuple(
+                    id_to_slug.get(str(i), str(i)) for i in allowed_ids if i
+                )
+            result.append(
+                AttributeInfo(
+                    api_slug=getattr(a, "api_slug", ""),
+                    title=getattr(a, "title", ""),
+                    attribute_type=getattr(a, "type", ""),
+                    is_multiselect=bool(getattr(a, "is_multiselect", False)),
+                    is_unique=bool(getattr(a, "is_unique", False)),
+                    is_required=bool(getattr(a, "is_required", False)),
+                    is_archived=bool(getattr(a, "is_archived", False)),
+                    is_system=bool(getattr(a, "is_system_attribute", False)),
+                    allowed_objects=allowed,
+                ),
+            )
+        return result
+
+
+def list_select_options(*, target_object: str, attribute_slug: str) -> list[str]:
+    """Return the option titles on a ``select`` attribute. Read-only."""
+    with get_client() as client:
+        response = (
+            client.attributes.get_v2_target_identifier_attributes_attribute_options(
+                target="objects",
+                identifier=target_object,
+                attribute=attribute_slug,
+            )
+        )
+        return [getattr(option, "title", "") for option in response.data]
+
+
+def list_status_options(*, target_object: str, attribute_slug: str) -> list[str]:
+    """Return the status titles on a ``status`` attribute. Read-only.
+
+    ``status`` attributes (e.g. ``triage_status``) expose their vocabulary via a
+    different endpoint than selects, and :func:`ensure_select_options` cannot
+    read or seed them. The diff path uses this to surface status drift between
+    workspaces even though seeding status values stays human-managed.
+    """
+    with get_client() as client:
+        response = (
+            client.attributes.get_v2_target_identifier_attributes_attribute_statuses(
+                target="objects",
+                identifier=target_object,
+                attribute=attribute_slug,
+            )
+        )
+        return [getattr(status, "title", "") for status in response.data]
 
 
 def create_attribute(

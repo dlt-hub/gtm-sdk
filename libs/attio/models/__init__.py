@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from libs.attio.models.attributes import AttributeCreateResult
+from libs.attio.models.attributes import AttributeCreateResult, AttributeInfo
 from libs.attio.models.companies import (
     CompanyInput,
     CompanyResult,
@@ -30,6 +30,7 @@ from libs.attio.models.tracking_events import (
 
 __all__ = [
     "AttributeCreateResult",
+    "AttributeInfo",
     "CompanyInput",
     "CompanyResult",
     "CompanySearchResult",
