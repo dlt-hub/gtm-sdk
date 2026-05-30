@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections.abc import Callable
 from typing import Any, Literal
 
@@ -48,6 +49,38 @@ OPTIONAL_FIELD_ALIASES = {
 }
 
 logger = logging.getLogger(__name__)
+
+# Identity lookups page the FULL match set for a non-unique identity so the
+# canonical pick (min record_id) is identical on the read path
+# (`get_person_values`) and the write path (`upsert_person` /
+# `_reconcile_create_race`) — both go through `_search_by_identity`. The page
+# bound is a safety net against an unbounded loop, far above any realistic
+# per-identity duplicate count (a create-race produces a handful); exceeding it
+# is logged rather than silently truncated.
+_IDENTITY_PAGE_SIZE = 50
+_IDENTITY_MAX_PAGES = 20
+
+# Post-create race re-check (see `_reconcile_create_race`). Attio's record query
+# index is read-after-write but can lag a competing create by a few ms, so a
+# single immediate re-search can miss the racer. Re-search a few times with a
+# short backoff, breaking as soon as a duplicate is visible. Bounded: this path
+# only runs on non-unique-identity CREATEs (low real-time volume; the backfill
+# is correctness-sensitive, not latency-sensitive), so the worst-case added
+# latency (no race) is _RACE_RECHECK_ATTEMPTS * _RACE_RECHECK_BACKOFF_S.
+_RACE_RECHECK_ATTEMPTS = 3
+_RACE_RECHECK_BACKOFF_S = 0.05
+
+
+class IdentityMatchOverflowError(RuntimeError):
+    """Raised when an identity has more matches than `_search_by_identity` will
+    page through, so any canonical pick would be from a truncated set.
+
+    A distinct type (not a bare RuntimeError) so callers that otherwise degrade
+    transient lookup errors to a safe default — notably
+    ``get_person_values``'s broad ``except Exception`` — can let THIS one
+    propagate instead of masking a data-integrity condition as "not found".
+    """
+
 
 _LINKEDIN_PROFILE_RE = re.compile(
     r"^https?://(?:www\.)?linkedin\.com/in/([^/?#]+)",
@@ -205,6 +238,7 @@ def _search_people_raw(
     github_handle: str | None = None,
     sample: bool = False,
     limit: int = 25,
+    offset: int = 0,
 ) -> list[PersonSearchResult]:
     conditions: list[dict[str, Any]] = []
     if name:
@@ -270,6 +304,7 @@ def _search_people_raw(
                 object="people",
                 filter_=filter_,
                 limit=limit,
+                offset=offset,
             )
         except Exception as exc:
             # A filter slug the people object doesn't define (e.g.
@@ -603,29 +638,263 @@ def update_person(
         )
 
 
+# Identity attributes for which Attio enforces NO server-side uniqueness, so a
+# read-then-create upsert can race a concurrent create and produce duplicate
+# people. `email` is excluded: `email_addresses` is is_unique=True, so a racing
+# duplicate create raises a uniqueness conflict in add_person. `github_handle`
+# and `linkedin` are plain text — Attio REJECTS is_unique on them because the
+# people object already has records ("Cannot set attribute as unique"), verified
+# at both create and PATCH — so the create-race is converged in the application
+# layer instead (see `_reconcile_create_race`).
+_NON_UNIQUE_IDENTITIES: frozenset[str] = frozenset({"linkedin", "github_handle"})
+
+
+def _search_by_identity(
+    matching_attribute: Literal["email", "linkedin", "github_handle"],
+    input: PersonInput,
+) -> list[PersonSearchResult]:
+    """Return ALL people matching the identifier named by ``matching_attribute``.
+
+    The single source of truth for identity matching: both the upsert lookup
+    (`upsert_person`), the post-create race re-check (`_reconcile_create_race`),
+    and the merge read (`get_person_values`) call this, so they all see the same
+    candidate set and pick the same canonical record (min record_id). The field
+    name on ``PersonInput`` matches ``matching_attribute`` for all three.
+
+    Pages the full result set (a non-unique identity can carry duplicates after a
+    create-race) up to `_IDENTITY_MAX_PAGES`; exceeding the bound is logged, not
+    silently truncated. Propagates `SchemaMismatchError` from `_search_people_raw`
+    (e.g. github_handle before bootstrap) so callers can degrade (ai-0ex).
+    """
+    if matching_attribute not in ("email", "linkedin", "github_handle"):
+        raise ValueError(f"Unknown matching_attribute: {matching_attribute!r}")
+
+    matches: list[PersonSearchResult] = []
+    offset = 0
+    for _ in range(_IDENTITY_MAX_PAGES):
+        page = _search_people_raw(
+            email=input.email if matching_attribute == "email" else None,
+            linkedin=input.linkedin if matching_attribute == "linkedin" else None,
+            github_handle=(
+                input.github_handle if matching_attribute == "github_handle" else None
+            ),
+            limit=_IDENTITY_PAGE_SIZE,
+            offset=offset,
+        )
+        matches.extend(page)
+        # A short page means we reached the end of the result set — this is the
+        # normal termination, so the loop paginates until the API has no more.
+        if len(page) < _IDENTITY_PAGE_SIZE:
+            break
+        offset += _IDENTITY_PAGE_SIZE
+    else:
+        # The cap is a runaway-loop backstop set far above any realistic
+        # per-identity duplicate count. Hitting it means the candidate set is
+        # incomplete, so the canonical pick would be a guess — fail loud rather
+        # than silently canonicalize against a partial set.
+        msg = (
+            f"_search_by_identity: exceeded {_IDENTITY_MAX_PAGES} pages "
+            f"({_IDENTITY_MAX_PAGES * _IDENTITY_PAGE_SIZE} records) for "
+            f"{matching_attribute}; refusing to canonicalize on a partial set"
+        )
+        raise IdentityMatchOverflowError(msg)
+    return matches
+
+
+def _delete_person(record_id: str) -> None:
+    """Hard-delete a person record.
+
+    Scoped to ONE caller: retracting a duplicate THIS process just created while
+    resolving a non-unique-identity upsert race (see `_reconcile_create_race`).
+    It is deliberately not a general-purpose CRM delete — adding broad delete
+    surface to the people path is out of scope and risky.
+    """
+    with get_client() as client:
+        client.records.delete_v2_objects_object_records_record_id_(
+            object="people",
+            record_id=record_id,
+        )
+
+
+def _reconcile_create_race(
+    *,
+    input: PersonInput,
+    created: ReliabilityEnvelope,
+    matching_attribute: Literal["email", "linkedin", "github_handle"],
+    identity_label: str,
+    identity_value: str | None,
+) -> ReliabilityEnvelope:
+    """Converge a possible create-race on a non-unique identity attribute.
+
+    Because Attio cannot enforce uniqueness on `linkedin`/`github_handle` (see
+    `_NON_UNIQUE_IDENTITIES`), two concurrent ``upsert_person`` calls for the
+    same identity can both read zero matches and both create a person. After the
+    create, re-search by the same identity (a few times with a short backoff, so
+    an eventually-consistent competing create becomes visible): if more than one
+    record now carries it, the lexicographically-smallest ``record_id`` is
+    canonical (the same tiebreak the >1-match read path uses). The writer that did
+    NOT land the canonical record retracts its own just-created duplicate and
+    re-applies its data onto the canonical record, so both racers converge.
+
+    Best-effort and non-fatal: this only ever deletes the record THIS call just
+    created. If the re-search or that cleanup delete fails (for example the
+    injected key lacks delete scope), the duplicate persists and is flagged with
+    a warning. It is NOT auto-removed later — the >1-match read path
+    (`upsert_person`) deterministically routes future writes to the canonical
+    record but deliberately does not delete pre-existing duplicates (that would
+    risk dropping data only present on the duplicate; it needs a real merge).
+    A persisting duplicate therefore requires manual merge/cleanup in Attio.
+    This never raises past the original create.
+    """
+    created_id = getattr(created, "record_id", None)
+    if not created_id:
+        return created
+
+    # Re-search a few times with a short backoff: Attio's query index can lag a
+    # competing create by a few ms, so a single immediate re-search can miss the
+    # racer and wrongly conclude "no duplicate". Stop early the moment a second
+    # record is visible. Worst case (genuinely no race) is the full attempt budget.
+    rematches: list[PersonSearchResult] = []
+    for attempt in range(_RACE_RECHECK_ATTEMPTS):
+        try:
+            rematches = _search_by_identity(matching_attribute, input)
+        except Exception as exc:  # best-effort convergence; never fail the upsert
+            logger.debug(
+                "create-race re-search failed for %s=%s: %s",
+                identity_label,
+                identity_value,
+                exc,
+            )
+            return created
+        if len({m.record_id for m in rematches} | {created_id}) > 1:
+            break  # duplicate visible — no need to wait further
+        if attempt < _RACE_RECHECK_ATTEMPTS - 1:
+            time.sleep(_RACE_RECHECK_BACKOFF_S)
+
+    record_ids = sorted({m.record_id for m in rematches} | {created_id})
+    if len(record_ids) <= 1:
+        return created  # no concurrent duplicate observed
+
+    canonical = record_ids[0]
+    if created_id == canonical:
+        # Our record is canonical; the racing writer should retract its own
+        # duplicate. Flag it for observability — if that writer's delete fails
+        # the duplicate persists and needs manual merge (we never delete a record
+        # this call did not create).
+        created.warnings.append(
+            WarningEntry(
+                code="upsert_race_duplicate_detected",
+                message=(
+                    f"Concurrent create detected for {identity_label}="
+                    f"{identity_value!r}; kept this (canonical) record. The racing "
+                    f"writer should retract its {len(record_ids) - 1} duplicate(s); "
+                    "any it fails to delete persists until manually merged."
+                ),
+                field=identity_label,
+                retryable=False,
+            ),
+        )
+        created.partial_success = True
+        return created
+
+    # We lost the race. Merge our data onto the canonical record FIRST, and only
+    # retract our duplicate after the merge succeeds. Deleting first would risk
+    # losing our data if the merge then failed — leaving the duplicate removed
+    # AND the canonical record un-updated.
+    try:
+        envelope = update_person(record_id=canonical, email=None, input=input)
+    except Exception as exc:
+        # Merge failed: keep our just-created record (no data loss) and flag it.
+        # Two records now exist; future upserts route writes to the canonical one
+        # but do NOT auto-remove this duplicate, so it persists until manually
+        # merged. Degrades rather than dropping data.
+        logger.debug(
+            "create-race merge onto canonical %s failed; keeping duplicate %s: %s",
+            canonical,
+            created_id,
+            exc,
+        )
+        created.warnings.append(
+            WarningEntry(
+                code="upsert_race_merge_failed",
+                message=(
+                    f"Concurrent create for {identity_label}={identity_value!r} "
+                    f"raced; merge onto canonical {canonical} failed, kept this "
+                    f"record {created_id}. A duplicate person remains and is not "
+                    "auto-removed — manual merge in Attio may be needed."
+                ),
+                field=identity_label,
+                retryable=True,
+            ),
+        )
+        created.partial_success = True
+        return created
+
+    # Merge landed; now retract our redundant duplicate (best-effort, non-fatal).
+    # The warning must reflect what ACTUALLY happened: only claim the duplicate
+    # was retracted when the delete succeeded, else the caller gets a false
+    # "resolved" signal while the duplicate is still live.
+    try:
+        _delete_person(created_id)
+    except Exception as exc:
+        logger.debug(
+            "create-race cleanup delete failed for %s: %s",
+            created_id,
+            exc,
+        )
+        envelope.warnings.append(
+            WarningEntry(
+                code="upsert_race_cleanup_delete_failed",
+                message=(
+                    f"Concurrent create for {identity_label}={identity_value!r} "
+                    f"raced; merged onto canonical {canonical} but FAILED to "
+                    f"retract duplicate {created_id}. It persists and is not "
+                    "auto-removed later — manual merge in Attio may be needed."
+                ),
+                field=identity_label,
+                retryable=True,
+            ),
+        )
+    else:
+        envelope.warnings.append(
+            WarningEntry(
+                code="upsert_race_resolved_to_existing",
+                message=(
+                    f"Concurrent create for {identity_label}={identity_value!r} "
+                    f"raced; merged onto canonical record {canonical} and retracted "
+                    f"duplicate {created_id}."
+                ),
+                field=identity_label,
+                retryable=False,
+            ),
+        )
+    envelope.partial_success = True
+    return envelope
+
+
 def upsert_person(
     input: PersonInput,
     *,
     matching_attribute: Literal["email", "linkedin", "github_handle"] = "email",
     strict: bool = False,
 ) -> ReliabilityEnvelope:
-    if matching_attribute == "email":
-        matches = _search_people_raw(email=input.email, limit=50)
-        identity_value = input.email
-        identity_label = "email"
-    elif matching_attribute == "linkedin":
-        matches = _search_people_raw(linkedin=input.linkedin, limit=50)
-        identity_value = input.linkedin
-        identity_label = "linkedin"
-    elif matching_attribute == "github_handle":
-        matches = _search_people_raw(github_handle=input.github_handle, limit=50)
-        identity_value = input.github_handle
-        identity_label = "github_handle"
-    else:
-        raise ValueError(f"Unknown matching_attribute: {matching_attribute!r}")
+    # `_search_by_identity` validates `matching_attribute` (raises on unknown).
+    # The PersonInput field name matches the matching_attribute for all three.
+    matches = _search_by_identity(matching_attribute, input)
+    identity_value: str | None = getattr(input, matching_attribute, None)
+    identity_label = matching_attribute
 
     if len(matches) == 0:
-        return add_person(input)
+        created = add_person(input)
+        if matching_attribute in _NON_UNIQUE_IDENTITIES:
+            return _reconcile_create_race(
+                input=input,
+                created=created,
+                matching_attribute=matching_attribute,
+                identity_label=identity_label,
+                identity_value=identity_value,
+            )
+        return created
 
     if len(matches) == 1:
         return update_person(record_id=matches[0].record_id, email=None, input=input)
@@ -640,7 +909,11 @@ def upsert_person(
     envelope.warnings.append(
         WarningEntry(
             code="upsert_multi_match_selected_record",
-            message="Multiple records matched; selected lexicographically smallest record_id.",
+            message=(
+                "Multiple records matched; wrote to the lexicographically smallest "
+                "record_id. The other duplicate(s) are left in place (not "
+                "auto-removed) and may need manual merge in Attio."
+            ),
             field="record_id",
             retryable=False,
         ),
@@ -677,52 +950,53 @@ def get_person_values(
         (existing safety net — keeps the upsert from cascading-failing
         on a flaky read).
     """
-    identifier_map = {
-        "email": ("email_addresses", email),
-        "linkedin": ("linkedin", linkedin),
-        "github_handle": ("github_handle", github_handle),
+    identifier_map: dict[str, str | None] = {
+        "email": email,
+        "linkedin": linkedin,
+        "github_handle": github_handle,
     }
     if matching_attribute not in identifier_map:
         raise ValueError(
             f"get_person_values: unknown matching_attribute={matching_attribute!r}",
         )
-    filter_key, filter_value = identifier_map[matching_attribute]
-    if not filter_value:
+    if not identifier_map[matching_attribute]:
         raise ValueError(
             f"get_person_values: matching_attribute={matching_attribute!r} "
             f"requires non-empty {matching_attribute!r}",
         )
 
-    # LinkedIn URLs vary on scheme, host prefix, and trailing slash. The write
-    # path in ``upsert_person`` searches the full variant set via
-    # ``_search_people_raw``; the read here must too, otherwise a non-canonical
-    # URL on the op can miss the existing record and silently bypass
-    # ``merge_only_if_empty`` protection while the write still hits it.
-    filter_: dict[str, Any]
-    if matching_attribute == "linkedin":
-        variants = _linkedin_url_variants(filter_value)
-        if len(variants) == 1:
-            filter_ = {filter_key: variants[0]}
-        else:
-            filter_ = {"$or": [{filter_key: v} for v in variants]}
-    else:
-        filter_ = {filter_key: filter_value}
-
     try:
+        # Select via the SAME identity primitive the write path uses, so a
+        # non-unique identity with post-race duplicates resolves to the SAME
+        # canonical record (min record_id) on read and write — otherwise
+        # merge_only_if_empty could inspect one duplicate while the write lands
+        # on another. _search_by_identity also handles linkedin URL variants and
+        # exhaustive pagination. Then read that one record's full values by id.
+        matches = _search_by_identity(
+            matching_attribute,
+            PersonInput(
+                email=email,
+                linkedin=linkedin,
+                github_handle=github_handle,
+            ),
+        )
+        if not matches:
+            return None
+        canonical_id = min(m.record_id for m in matches)
         with get_client() as client:
-            response = client.records.post_v2_objects_object_records_query(
+            response = client.records.get_v2_objects_object_records_record_id_(
                 object="people",
-                filter_=filter_,
-                limit=1,
+                record_id=canonical_id,
             )
-
-            if not response.data:
-                return None
-
-            record = response.data[0]
-            return dict(record.values or {})
+            return dict(response.data.values or {})
+    except IdentityMatchOverflowError:
+        # A truncated candidate set is a data-integrity condition, not a flaky
+        # read — must NOT be masked as "not found" (which would let the caller
+        # overwrite as if the identity were absent). Propagate it loudly.
+        raise
     except Exception:
-        # If lookup fails, return None to allow the upsert to proceed
+        # Any other lookup failure (transient query/GET error) degrades to None
+        # so the upsert can still proceed.
         return None
 
 

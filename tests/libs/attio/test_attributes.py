@@ -19,8 +19,12 @@ def _resp(data):
     return SimpleNamespace(data=data)
 
 
-def _attr(slug: str, *, is_archived: bool = False):
-    return SimpleNamespace(api_slug=slug, is_archived=is_archived)
+def _attr(slug: str, *, is_archived: bool = False, title: str | None = None):
+    return SimpleNamespace(
+        api_slug=slug,
+        is_archived=is_archived,
+        title=title if title is not None else slug,
+    )
 
 
 class _FakeAttributes:
@@ -28,6 +32,8 @@ class _FakeAttributes:
         self.attrs = attrs or []
         self.created_attrs: list[dict[str, object]] = []
         self.restored_slugs: list[str] = []
+        # Every PATCH (restore and/or title reconcile) recorded as (slug, data).
+        self.patch_calls: list[tuple[str, dict[str, object]]] = []
         self.options = options or []
         self.created_options: list[dict[str, object]] = []
         # Mapping of option title -> Exception to raise when POSTed. Each entry
@@ -62,8 +68,9 @@ class _FakeAttributes:
     ):
         assert target == "objects"
         assert identifier == "companies"
-        assert data == {"is_archived": False}
-        self.restored_slugs.append(attribute)
+        self.patch_calls.append((attribute, dict(data)))
+        if data.get("is_archived") is False:
+            self.restored_slugs.append(attribute)
         return _resp(_attr(attribute))
 
     def post_v2_target_identifier_attributes(self, *, target, identifier, data):
@@ -173,7 +180,7 @@ def test_create_companies_attribute_apply_creates_when_missing(monkeypatch) -> N
 def test_create_companies_attribute_apply_is_noop_when_already_exists(
     monkeypatch,
 ) -> None:
-    fake = _FakeAttributes(attrs=[_attr("gtm_tool_type")])
+    fake = _FakeAttributes(attrs=[_attr("gtm_tool_type", title="GTM Tool Type")])
     monkeypatch.setattr("libs.attio.attributes.get_client", lambda: _FakeClient(fake))
 
     result = create_companies_attribute(
@@ -188,14 +195,16 @@ def test_create_companies_attribute_apply_is_noop_when_already_exists(
     assert result.mode == "apply"
     assert result.attribute_exists is True
     assert result.attribute_created is False
+    assert result.attribute_title_updated is False
     assert fake.created_attrs == []
+    assert fake.patch_calls == []
 
 
 def test_create_attribute_apply_restores_archived_slug(monkeypatch) -> None:
     # The slug exists but is archived: create_attribute must un-archive it
     # (PATCH), NOT POST — POSTing 409s on the still-reserved slug. This is the
     # exact prod state behind ai-ica (no_show archived on tracking_events).
-    fake = _FakeAttributes(attrs=[_attr("no_show", is_archived=True)])
+    fake = _FakeAttributes(attrs=[_attr("no_show", is_archived=True, title="No Show")])
     monkeypatch.setattr("libs.attio.attributes.get_client", lambda: _FakeClient(fake))
 
     result = create_companies_attribute(
@@ -210,8 +219,11 @@ def test_create_attribute_apply_restores_archived_slug(monkeypatch) -> None:
     assert result.attribute_restored is True
     assert result.attribute_archived is True
     assert result.attribute_exists is False  # pre-state: not active
+    assert result.attribute_title_updated is False  # title already matched
     assert fake.created_attrs == []  # no POST attempted
     assert fake.restored_slugs == ["no_show"]
+    # Title matched, so the restore PATCH carries only is_archived.
+    assert fake.patch_calls == [("no_show", {"is_archived": False})]
 
 
 def test_create_attribute_preview_reports_would_restore_for_archived(
@@ -236,7 +248,7 @@ def test_create_attribute_preview_reports_would_restore_for_archived(
 
 
 def test_create_attribute_apply_active_slug_is_noop(monkeypatch) -> None:
-    fake = _FakeAttributes(attrs=[_attr("no_show", is_archived=False)])
+    fake = _FakeAttributes(attrs=[_attr("no_show", is_archived=False, title="No Show")])
     monkeypatch.setattr("libs.attio.attributes.get_client", lambda: _FakeClient(fake))
 
     result = create_companies_attribute(
@@ -250,8 +262,75 @@ def test_create_attribute_apply_active_slug_is_noop(monkeypatch) -> None:
     assert result.attribute_exists is True
     assert result.attribute_created is False
     assert result.attribute_restored is False
+    assert result.attribute_title_updated is False
     assert fake.created_attrs == []
     assert fake.restored_slugs == []
+    assert fake.patch_calls == []
+
+
+def test_create_attribute_apply_updates_drifted_title(monkeypatch) -> None:
+    # Active slug whose live title drifted from the declared title: --apply must
+    # converge it with a title-only PATCH (the non-converging-drift gap behind
+    # the ai-flm prod github_url title mismatch).
+    fake = _FakeAttributes(attrs=[_attr("no_show", title="Old Show")])
+    monkeypatch.setattr("libs.attio.attributes.get_client", lambda: _FakeClient(fake))
+
+    result = create_companies_attribute(
+        title="No Show",
+        api_slug="no_show",
+        attribute_type="checkbox",
+        is_multiselect=False,
+        apply=True,
+    )
+
+    assert result.attribute_exists is True
+    assert result.attribute_created is False
+    assert result.attribute_restored is False
+    assert result.attribute_title_updated is True
+    assert fake.created_attrs == []
+    assert fake.patch_calls == [("no_show", {"title": "No Show"})]
+
+
+def test_create_attribute_apply_restore_also_fixes_title(monkeypatch) -> None:
+    # An archived slug whose title also drifted: the single restore PATCH should
+    # both un-archive AND retitle in one round-trip.
+    fake = _FakeAttributes(
+        attrs=[_attr("no_show", is_archived=True, title="Old Show")],
+    )
+    monkeypatch.setattr("libs.attio.attributes.get_client", lambda: _FakeClient(fake))
+
+    result = create_companies_attribute(
+        title="No Show",
+        api_slug="no_show",
+        attribute_type="checkbox",
+        is_multiselect=False,
+        apply=True,
+    )
+
+    assert result.attribute_restored is True
+    assert result.attribute_title_updated is True
+    assert fake.patch_calls == [
+        ("no_show", {"is_archived": False, "title": "No Show"}),
+    ]
+
+
+def test_create_attribute_preview_never_patches_title(monkeypatch) -> None:
+    # Preview must stay read-only even when the title has drifted.
+    fake = _FakeAttributes(attrs=[_attr("no_show", title="Old Show")])
+    monkeypatch.setattr("libs.attio.attributes.get_client", lambda: _FakeClient(fake))
+
+    result = create_companies_attribute(
+        title="No Show",
+        api_slug="no_show",
+        attribute_type="checkbox",
+        is_multiselect=False,
+        apply=False,
+    )
+
+    assert result.attribute_title_updated is False
+    # Preview must still REPORT the drift so the operator sees the pending PATCH.
+    assert result.attribute_title_drifts is True
+    assert fake.patch_calls == []
 
 
 def test_ensure_select_options_swallows_409_conflict(monkeypatch) -> None:

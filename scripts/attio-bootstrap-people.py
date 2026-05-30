@@ -66,18 +66,23 @@ class AttrSpec:
 
 
 ATTRIBUTES: tuple[AttrSpec, ...] = (
-    # is_unique=True: github_handle is an identity / matching attribute (the
-    # search in _search_people_raw keys on it like email), so duplicates must be
-    # rejected by Attio.
+    # is_unique=False: github_handle is an identity / matching attribute, but
+    # matching is done CLIENT-SIDE in upsert_person via _search_people_raw's
+    # equality filter ({"github_handle": handle}) — NOT via Attio's native
+    # assert endpoint — so schema-level uniqueness is not required. This mirrors
+    # the system `linkedin` attribute, which is also text + non-unique and works
+    # as a matching_attribute the same way. Attio additionally REJECTS
+    # is_unique=True here ("Cannot set attribute as unique"): you cannot add a
+    # unique attribute to the people object once it already has records.
     AttrSpec(
-        "Github handle",
+        "GitHub handle",
         "github_handle",
         "text",
-        is_unique=True,
+        is_unique=False,
         description="GitHub username, used to match/link people from github mentions.",
     ),
     AttrSpec(
-        "Github URL",
+        "GitHub URL",
         "github_url",
         "text",
         description="https://github.com/<handle> profile URL.",
@@ -129,14 +134,27 @@ def run_diff() -> int:
         print("  (none)")
     actionable_drift = actionable_drift or bool(archived_slugs)
 
-    print("\n[type / flag MISMATCHES]")
+    # Title drift is auto-fixable (--apply PATCHes the live title); type/flag
+    # drift is NOT (Attio rejects those changes) and needs manual handling. Split
+    # them so the diff tells the operator which bucket a slug falls in.
+    title_drift: list[str] = []
+    print("\n[title DRIFT]  -> --apply updates the live title")
+    for slug in sorted(set(declared) & set(live)):
+        spec = declared[slug]
+        live_attr = live[slug]
+        if spec.title != live_attr.title:
+            title_drift.append(slug)
+            print(f"  ~ {slug}: script={spec.title!r} live={live_attr.title!r}")
+    if not title_drift:
+        print("  (none)")
+    actionable_drift = actionable_drift or bool(title_drift)
+
+    print("\n[type / flag MISMATCHES]  -> manual handling in Attio")
     mismatches = 0
     for slug in sorted(set(declared) & set(live)):
         spec = declared[slug]
         live_attr = live[slug]
         diffs: list[str] = []
-        if spec.title != live_attr.title:
-            diffs.append(f"title: script={spec.title!r} live={live_attr.title!r}")
         if spec.attribute_type != live_attr.attribute_type:
             diffs.append(
                 f"type: script={spec.attribute_type} live={live_attr.attribute_type}",
@@ -165,9 +183,9 @@ def run_diff() -> int:
 
     if actionable_drift:
         print(
-            "\nActionable drift found. Mirror is add-only — run --apply to create "
-            "missing attributes; a type/flag mismatch on an existing attribute "
-            "needs manual handling in Attio. (exit 1)",
+            "\nActionable drift found. Run --apply to create missing/archived "
+            "attributes and converge title drift; a type/flag mismatch on an "
+            "existing attribute needs manual handling in Attio. (exit 1)",
         )
         return 1
     print("\nNo actionable drift: workspace has the github attributes. (exit 0)")
@@ -212,21 +230,42 @@ def main() -> int:
             is_unique=spec.is_unique,
             apply=apply,
         )
-        if attr_result.attribute_created:
-            status = "created"
-        elif attr_result.attribute_restored:
-            status = "restored (un-archived)"
-        elif attr_result.attribute_exists:
-            status = "exists (skip)"
-        else:
+        if apply:
+            if attr_result.attribute_created:
+                status = "created"
+            elif attr_result.attribute_restored:
+                status = (
+                    "restored + retitled"
+                    if attr_result.attribute_title_updated
+                    else "restored (un-archived)"
+                )
+            elif attr_result.attribute_title_updated:
+                status = "title updated"
+            else:
+                status = "exists (skip)"
+        # Preview: report every write --apply WOULD perform (incl. a title PATCH
+        # on an active attribute), so an operator never misses a live mutation.
+        elif not attr_result.attribute_exists and not attr_result.attribute_archived:
             status = "would-create"
             pending += 1
+        elif attr_result.attribute_archived:
+            status = (
+                "would-restore + retitle"
+                if attr_result.attribute_title_drifts
+                else "would-restore"
+            )
+            pending += 1
+        elif attr_result.attribute_title_drifts:
+            status = "would-retitle"
+            pending += 1
+        else:
+            status = "exists (skip)"
         print(
             f"[attribute]   {spec.api_slug:15s}  {spec.attribute_type:6s}  {status}",
         )
 
     if not apply:
-        print(f"{pending} creates pending. Run with --apply to execute.")
+        print(f"{pending} change(s) pending. Run with --apply to execute.")
     return 0
 
 

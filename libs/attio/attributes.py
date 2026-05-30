@@ -144,6 +144,10 @@ def create_attribute(
                 getattr(attr, "api_slug", ""): bool(getattr(attr, "is_archived", False))
                 for attr in attributes_response.data
             }
+            title_by_slug = {
+                getattr(attr, "api_slug", ""): getattr(attr, "title", "")
+                for attr in attributes_response.data
+            }
         except SDKError as exc:
             # Parent object does not exist yet (e.g. preview run before bootstrap).
             # Treat as "no attributes exist" so the script can report would-create
@@ -152,6 +156,7 @@ def create_attribute(
             if status != 404:
                 raise
             archived_by_slug = {}
+            title_by_slug = {}
 
         slug_present = api_slug in archived_by_slug
         slug_archived = archived_by_slug.get(api_slug, False)
@@ -159,6 +164,13 @@ def create_attribute(
         attribute_exists = slug_present and not slug_archived
         attribute_created = False
         attribute_restored = False
+        attribute_title_updated = False
+        # Pre-state, computed for preview and apply alike: a present slug whose
+        # live title differs from the declared title. Drives the preview
+        # "would-retitle" status and the apply title PATCH below.
+        attribute_title_drifts = (
+            slug_present and title_by_slug.get(api_slug, "") != title
+        )
 
         if apply and not slug_present:
             config: dict[str, object] = {}
@@ -187,13 +199,30 @@ def create_attribute(
             attribute_created = True
         elif apply and slug_archived:
             # Slug exists but archived: restore it rather than POST (which 409s).
+            # Fold the declared title into the same PATCH so a restore also
+            # converges any title drift in one round-trip.
+            restore_data: dict[str, object] = {"is_archived": False}
+            if attribute_title_drifts:
+                restore_data["title"] = title
+                attribute_title_updated = True
             client.attributes.patch_v2_target_identifier_attributes_attribute_(
                 target="objects",
                 identifier=target_object,
                 attribute=api_slug,
-                data={"is_archived": False},
+                data=restore_data,
             )
             attribute_restored = True
+        elif apply and attribute_exists and attribute_title_drifts:
+            # Active attribute whose live title drifted from the declared title.
+            # Title is the one field create_attribute can converge in place
+            # (PATCH); type/flag changes are rejected by Attio and stay manual.
+            client.attributes.patch_v2_target_identifier_attributes_attribute_(
+                target="objects",
+                identifier=target_object,
+                attribute=api_slug,
+                data={"title": title},
+            )
+            attribute_title_updated = True
 
     return AttributeCreateResult(
         mode="apply" if apply else "preview",
@@ -204,6 +233,8 @@ def create_attribute(
         attribute_created=attribute_created,
         attribute_archived=slug_archived,
         attribute_restored=attribute_restored,
+        attribute_title_updated=attribute_title_updated,
+        attribute_title_drifts=attribute_title_drifts,
     )
 
 

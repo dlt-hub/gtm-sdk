@@ -21,6 +21,17 @@ class AttributeCreateResult(BaseModel):
     attribute_created: bool
     attribute_archived: bool = False
     attribute_restored: bool = False
+    # ``attribute_title_updated`` records that an apply PATCHed the live title to
+    # match the declared title. ``create_attribute`` is otherwise add-only, but a
+    # title is the one field it CAN converge in place (type/flag changes still
+    # need manual handling in Attio). Without this, a workspace created with an
+    # older title shows permanent, non-converging drift in ``--diff``.
+    attribute_title_updated: bool = False
+    # ``attribute_title_drifts`` is the observed pre-state: the slug is present
+    # but its live title differs from the declared title. Set in BOTH preview and
+    # apply so a ``--preview`` run can report the title PATCH that ``--apply``
+    # would perform, instead of mislabeling the attribute "exists (skip)".
+    attribute_title_drifts: bool = False
 
 
 class AttributeInfo(BaseModel):
