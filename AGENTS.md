@@ -149,6 +149,7 @@ bd close <id>         # Complete work
 
 ### Rules
 
+- **When handed a bead prompt, claim it FIRST.** If the task references a bead ID (e.g. a prompt like `○ ai-5ph ● P2 hermes: deploy hermes-agent to railway with slack socket mode`), immediately run `bd update <id> --claim` and mark it in progress (`bd update <id> --status in_progress`) before doing any other work. Do not start the task while the bead is still unclaimed/open.
 - Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
 - Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
