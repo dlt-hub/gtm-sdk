@@ -242,7 +242,7 @@ def messages_for_payload(
         host = payload.creator_email()
         return [_msg_for_rescheduled(payload, host)] if host else []
     if isinstance(payload, BookingNoShowPayload):
-        no_show_emails = [a.email for a in payload.attendees if a.noShow]
+        no_show_emails = [a.email for a in payload.attendees if a.noShow and a.email]
         if not no_show_emails:
             return []
         with calcom_client_factory() as client:
