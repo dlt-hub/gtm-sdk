@@ -19,7 +19,11 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-SLACK_OP_TIMEOUT_SECONDS: float = float(
+# Whole seconds — slack_sdk's WebClient.timeout is typed int. Parsing as int
+# (rather than float + int()) avoids silently truncating a sub-second override
+# like "0.5" to 0, which slack_sdk treats as "no timeout". A non-integer value
+# fails loudly here, which is the right behavior for a misconfiguration.
+SLACK_OP_TIMEOUT_SECONDS: int = int(
     os.environ.get("SLACK_OP_TIMEOUT_SECONDS", "10"),
 )
 
@@ -65,4 +69,4 @@ def get_client(token: str | None = None):
     # need api_key_scope (e.g. src.secrets_bootstrap wiring KEY_SCOPES).
     from slack_sdk import WebClient
 
-    return WebClient(token=resolved, timeout=int(SLACK_OP_TIMEOUT_SECONDS))
+    return WebClient(token=resolved, timeout=SLACK_OP_TIMEOUT_SECONDS)

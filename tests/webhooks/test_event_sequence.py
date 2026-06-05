@@ -546,6 +546,14 @@ def _stub_slack_downstream(
     # modal_dict_thread_store() as arguments to execute(), so all three must be
     # neutralized to keep the test off Slack/Modal even if hydrate() resolves a
     # token in the (CI) environment.
+    #
+    # Defensive on the common path: _export() runs hydrate("SLACK_BOT_TOKEN") /
+    # infisical.fetch("SLACK_CHANNEL_ID") *before* reaching these symbols, and
+    # the autouse api-key fixture seeds only ATTIO/CALCOM — so absent Slack keys
+    # hydrate raises, the caller's try/except swallows it, and this test
+    # exercises the received → completed(status=error) path. These patches only
+    # take effect if the env happens to provide the Slack keys. Real dispatch /
+    # threading is covered by tests/src/slack/test_caldotcom_slack_export.py.
     class _FakeResult:
         @staticmethod
         def body() -> str:
