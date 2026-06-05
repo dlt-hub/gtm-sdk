@@ -563,14 +563,12 @@ class Webhook(CalcomWebhook):
         # request time. ``_calcom_client()`` still fetches lazily inside
         # the BOOKING_NO_SHOW_UPDATED branch.
         #
-        # The Slack keys are listed here (not in ``required_api_keys``) so the
-        # Attio/GCS handlers — which share this method via the generic
-        # preflight — never hydrate them at request time. The Slack handler
-        # (``webhooks/export_to_slack.py``) hydrates ``SLACK_BOT_TOKEN`` itself
-        # and fetches ``SLACK_CHANNEL_ID`` lazily; listing both here only adds
-        # them to ``scripts/webhooks-redeploy.py``'s deploy-time existence
-        # check.
-        return ["CALCOM_API_KEY", "SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID"]
+        # Slack keys are deliberately NOT listed here: this method is shared by
+        # every handler's preflight (Attio/GCS/Slack), so adding them would gate
+        # the Attio/GCS deploys on Slack secrets they never touch. The Slack
+        # deploy gets its own preflight, scoped to ``export_to_slack``, in
+        # ``scripts/webhooks-redeploy.py`` (``_SLACK_HANDLER_API_KEYS``).
+        return ["CALCOM_API_KEY"]
 
     @staticmethod
     def attio_get_app_name() -> str:

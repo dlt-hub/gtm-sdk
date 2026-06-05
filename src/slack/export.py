@@ -16,7 +16,7 @@ from typing import Any
 from libs.logging.structured import log
 from libs.slack import post_message
 from src.slack.ops import SlackMessage
-from src.slack.thread_store import InMemoryThreadStore, ThreadStore
+from src.slack.thread_store import ThreadStore
 
 
 @dataclass
@@ -52,7 +52,7 @@ def execute(
     *,
     channel: str,
     client: Any,
-    thread_store: ThreadStore | None = None,
+    thread_store: ThreadStore,
 ) -> ExecuteResult:
     """Post ``messages`` to ``channel``, threading by ``thread_key``.
 
@@ -81,11 +81,10 @@ def execute(
     Both are accepted edges for a best-effort notifier (lifecycle events for one
     booking are rarely simultaneous and Hookdeck redelivery is infrequent).
     """
-    store = thread_store if thread_store is not None else InMemoryThreadStore()
     result = ExecuteResult()
 
     for msg in messages:
-        anchor = store.get(msg.thread_key)
+        anchor = thread_store.get(msg.thread_key)
         is_opening = anchor is None
         try:
             posted = post_message(
@@ -120,7 +119,7 @@ def execute(
         if is_opening:
             # Anchor the thread on the first message's ts so later lifecycle
             # events reply under it.
-            store.set(msg.thread_key, posted.ts)
+            thread_store.set(msg.thread_key, posted.ts)
 
         log(
             "slack.posted",

@@ -235,6 +235,15 @@ def _preflight_modal_secrets() -> None:
             )
 
 
+# Keys the Slack handler needs but that are NOT declared on any source's
+# required/optional_api_keys() — doing so would gate the Attio/GCS deploys on
+# Slack secrets they never use. ``webhooks/export_to_slack.py`` hydrates
+# SLACK_BOT_TOKEN and fetches SLACK_CHANNEL_ID at request time; this list keeps
+# the deploy-time existence check, scoped to that handler only (mirrors the
+# handler-scoped GCS bucket preflight).
+_SLACK_HANDLER_API_KEYS: tuple[str, ...] = ("SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID")
+
+
 def _preflight_infisical_keys(
     handler_file: Path,
     sources: Iterable[str],
@@ -301,6 +310,14 @@ def _preflight_infisical_keys(
             stripped = key.strip()
             if stripped and stripped not in preflight:
                 preflight.append(stripped)
+
+    # Handler-scoped keys: the Slack handler's secrets aren't on any source's
+    # required/optional_api_keys() (see _SLACK_HANDLER_API_KEYS), so add them
+    # only when deploying export_to_slack.
+    if handler_file.stem == "export_to_slack":
+        for key in _SLACK_HANDLER_API_KEYS:
+            if key not in preflight:
+                preflight.append(key)
 
     if not preflight:
         return
