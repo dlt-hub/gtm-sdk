@@ -157,7 +157,6 @@ def _msg_for_rescheduled(
 
 
 def _msg_for_no_show(
-    payload: BookingNoShowPayload,
     host_email: str,
     start: datetime,
     no_show_emails: list[str],
@@ -245,7 +244,7 @@ def messages_for_payload(
         host = booking.creator_email()
         if not host:
             return []
-        return [_msg_for_no_show(payload, host, booking.start, no_show_emails)]
+        return [_msg_for_no_show(host, booking.start, no_show_emails)]
     if isinstance(payload, MeetingEndedPayload):
         host = payload.userPrimaryEmail
         return [_msg_for_meeting_ended(payload, host)] if host else []

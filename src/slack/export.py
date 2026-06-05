@@ -63,13 +63,23 @@ def execute(
     never delivered), it falls back to a top-level post so the event is never
     silently dropped.
 
-    Threading is best-effort, not guaranteed. The anchor lookup is a non-atomic
-    read-modify-write (``get`` -> post -> ``set``) over the ``thread_store``,
-    and the Modal endpoint runs ``@modal.concurrent``. Two events for the same
-    booking arriving close together — or a Hookdeck redelivery — can both see
-    no anchor and each open a separate top-level thread. Events for one booking
-    are rarely simultaneous, so this is an accepted edge; a put-if-absent on the
-    store would be needed to elect a single opener deterministically.
+    Threading is best-effort, not guaranteed, and not idempotent:
+
+    - Non-atomic race: the anchor lookup is a read-modify-write
+      (``get`` -> post -> ``set``) and the Modal endpoint runs
+      ``@modal.concurrent``. Two events for the same booking arriving close
+      together can both see no anchor and each open a separate top-level
+      thread. A put-if-absent on the store would be needed to elect a single
+      opener deterministically.
+    - Redelivery duplicates: there is no idempotency key on the message. A
+      Hookdeck **redelivery** of the opening event re-posts it — as a threaded
+      reply (the anchor now exists) duplicating the original; a redelivery of a
+      later event re-posts that reply. Keying the store on
+      ``(thread_key, event_subtype)`` or recording posted event ids would
+      suppress this.
+
+    Both are accepted edges for a best-effort notifier (lifecycle events for one
+    booking are rarely simultaneous and Hookdeck redelivery is infrequent).
     """
     store = thread_store if thread_store is not None else InMemoryThreadStore()
     result = ExecuteResult()

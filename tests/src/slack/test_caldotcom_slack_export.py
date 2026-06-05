@@ -139,6 +139,55 @@ def test_no_show_fetches_booking_then_emits_urgent_message() -> None:
     assert msgs[0].urgent is True
 
 
+def test_meeting_ended_completed_is_non_urgent_with_rating() -> None:
+    from datetime import UTC, datetime
+
+    from libs.caldotcom.models import MeetingEndedPayload
+    from src.caldotcom.webhook.slack_export import messages_for_payload
+
+    payload = MeetingEndedPayload.model_validate(
+        {
+            "triggerEvent": "MEETING_ENDED",
+            "uid": "bk-ended",
+            "startTime": datetime(2026, 3, 1, 15, 0, tzinfo=UTC).isoformat(),
+            "endTime": datetime(2026, 3, 1, 15, 30, tzinfo=UTC).isoformat(),
+            "userPrimaryEmail": "host@example.com",
+            "attendees": [{"email": "guest@acme.com"}],
+            "rating": 5,
+            "ratingFeedback": "great call",
+            "noShowHost": False,
+        },
+    )
+    msgs = messages_for_payload(payload, calcom_client_factory=None)
+    assert len(msgs) == 1
+    assert msgs[0].event_subtype == "completed"
+    assert msgs[0].urgent is False
+    assert "great call" in msgs[0].text
+
+
+def test_meeting_ended_no_show_host_is_urgent() -> None:
+    from datetime import UTC, datetime
+
+    from libs.caldotcom.models import MeetingEndedPayload
+    from src.caldotcom.webhook.slack_export import messages_for_payload
+
+    payload = MeetingEndedPayload.model_validate(
+        {
+            "triggerEvent": "MEETING_ENDED",
+            "uid": "bk-ended-noshow",
+            "startTime": datetime(2026, 3, 1, 15, 0, tzinfo=UTC).isoformat(),
+            "endTime": datetime(2026, 3, 1, 15, 30, tzinfo=UTC).isoformat(),
+            "userPrimaryEmail": "host@example.com",
+            "attendees": [{"email": "guest@acme.com"}],
+            "noShowHost": True,
+        },
+    )
+    msgs = messages_for_payload(payload, calcom_client_factory=None)
+    assert len(msgs) == 1
+    assert msgs[0].event_subtype == "no_show_host"
+    assert msgs[0].urgent is True
+
+
 def test_ping_and_meeting_started_produce_no_messages() -> None:
     assert _messages("api/samples/caldotcom.ping.redacted.json") == []
     assert _messages("api/samples/caldotcom.meeting.started.redacted.json") == []
