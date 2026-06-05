@@ -71,6 +71,7 @@ def test_lifecycle_events_for_one_booking_share_a_thread_key() -> None:
     from libs.caldotcom.models import (
         BookingCancelledPayload,
         BookingCreatedPayload,
+        BookingRescheduledPayload,
     )
     from src.caldotcom.webhook.slack_export import messages_for_payload
 
@@ -99,6 +100,20 @@ def test_lifecycle_events_for_one_booking_share_a_thread_key() -> None:
         },
     )
 
+    # RESCHEDULED carries the OLD start under startTime (rescheduleStartTime is
+    # the NEW start) — the most counterintuitive keying in the module — so it
+    # too must collide with CREATED on thread_key.
+    rescheduled = BookingRescheduledPayload.model_validate(
+        {
+            "triggerEvent": "BOOKING_RESCHEDULED",
+            "uid": "bk-1",
+            "startTime": start.isoformat(),
+            "endTime": start.isoformat(),
+            "rescheduleStartTime": datetime(2026, 3, 8, 15, 0, tzinfo=UTC).isoformat(),
+            "organizer": {"email": host},
+        },
+    )
+
     created_msg = messages_for_payload(
         created,
         calcom_client_factory=_unused_client_factory,
@@ -107,7 +122,12 @@ def test_lifecycle_events_for_one_booking_share_a_thread_key() -> None:
         cancelled,
         calcom_client_factory=_unused_client_factory,
     )[0]
+    rescheduled_msg = messages_for_payload(
+        rescheduled,
+        calcom_client_factory=_unused_client_factory,
+    )[0]
     assert created_msg.thread_key == cancelled_msg.thread_key
+    assert created_msg.thread_key == rescheduled_msg.thread_key
 
 
 def test_no_show_fetches_booking_then_emits_urgent_message() -> None:
@@ -186,6 +206,33 @@ def test_meeting_ended_no_show_host_is_urgent() -> None:
     assert len(msgs) == 1
     assert msgs[0].event_subtype == "no_show_host"
     assert msgs[0].urgent is True
+
+
+def test_long_field_values_are_truncated_to_slack_limit() -> None:
+    """A long cancellationReason must not exceed Slack's 2000-char per-field
+    cap (which would make chat.postMessage reject the whole post)."""
+    from datetime import UTC, datetime
+
+    from libs.caldotcom.models import BookingCancelledPayload
+    from src.caldotcom.webhook.slack_export import messages_for_payload
+
+    def _unused() -> object:
+        raise AssertionError("client factory must not be used for cancelled")
+
+    host = "host@example.com"
+    cancelled = BookingCancelledPayload.model_validate(
+        {
+            "triggerEvent": "BOOKING_CANCELLED",
+            "uid": "bk-long",
+            "startTime": datetime(2026, 3, 1, 15, 0, tzinfo=UTC).isoformat(),
+            "endTime": datetime(2026, 3, 1, 15, 0, tzinfo=UTC).isoformat(),
+            "organizer": {"email": host},
+            "cancellationReason": "x" * 5000,
+        },
+    )
+    msg = messages_for_payload(cancelled, calcom_client_factory=_unused)[0]
+    section = next(b for b in msg.blocks if b["type"] == "section")
+    assert all(len(f["text"]) <= 2000 for f in section["fields"])
 
 
 def test_ping_and_meeting_started_produce_no_messages() -> None:

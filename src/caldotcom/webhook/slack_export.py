@@ -72,11 +72,14 @@ def _blocks(
         {"type": "header", "text": {"type": "plain_text", "text": heading[:150]}},
     ]
     if fields:
+        # Slack rejects the whole post if any mrkdwn section field exceeds 2000
+        # chars; a long cancellationReason / ratingFeedback would otherwise make
+        # chat.postMessage fail. Cap each value (header is already capped above).
         blocks.append(
             {
                 "type": "section",
                 "fields": [
-                    {"type": "mrkdwn", "text": f"*{k}*\n{v}"} for k, v in fields
+                    {"type": "mrkdwn", "text": f"*{k}*\n{v}"[:2000]} for k, v in fields
                 ],
             },
         )
