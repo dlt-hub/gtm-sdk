@@ -51,14 +51,63 @@ def test_cancelled_is_urgent() -> None:
     assert msgs[0].urgent is True
 
 
-def test_rescheduled_threads_under_original_start() -> None:
-    _messages("api/samples/caldotcom.booking.created.redacted.json")[0]
+def test_rescheduled_is_non_urgent() -> None:
     rescheduled = _messages(
         "api/samples/caldotcom.booking.rescheduled.redacted.json",
     )
     assert len(rescheduled) == 1
     assert rescheduled[0].event_subtype == "rescheduled"
     assert rescheduled[0].urgent is False
+
+
+def test_lifecycle_events_for_one_booking_share_a_thread_key() -> None:
+    """The headline threading property: a CREATED event and a later CANCELLED
+    event for the *same* booking must collide on ``thread_key`` so the cancel
+    threads under the original message. Both key off ``canonical_meeting_uid``
+    of the same host + start, so they must match exactly. (The recorded
+    fixtures are different bookings, hence this builds matching payloads.)"""
+    from datetime import UTC, datetime
+
+    from libs.caldotcom.models import (
+        BookingCancelledPayload,
+        BookingCreatedPayload,
+    )
+    from src.caldotcom.webhook.slack_export import messages_for_payload
+
+    def _unused_client_factory() -> object:
+        raise AssertionError("client factory must not be used for created/cancelled")
+
+    host = "host@example.com"
+    start = datetime(2026, 3, 1, 15, 0, tzinfo=UTC)
+    created = BookingCreatedPayload.model_validate(
+        {
+            "triggerEvent": "BOOKING_CREATED",
+            "uid": "bk-1",
+            "start": start.isoformat(),
+            "end": start.isoformat(),
+            "organizer": {"email": host},
+        },
+    )
+    cancelled = BookingCancelledPayload.model_validate(
+        {
+            "triggerEvent": "BOOKING_CANCELLED",
+            "uid": "bk-1",
+            # CANCELLED carries the OLD start under startTime (see booking.py).
+            "startTime": start.isoformat(),
+            "endTime": start.isoformat(),
+            "organizer": {"email": host},
+        },
+    )
+
+    created_msg = messages_for_payload(
+        created,
+        calcom_client_factory=_unused_client_factory,
+    )[0]
+    cancelled_msg = messages_for_payload(
+        cancelled,
+        calcom_client_factory=_unused_client_factory,
+    )[0]
+    assert created_msg.thread_key == cancelled_msg.thread_key
 
 
 def test_no_show_fetches_booking_then_emits_urgent_message() -> None:

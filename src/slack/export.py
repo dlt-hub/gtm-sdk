@@ -62,6 +62,14 @@ def execute(
     later event arrives but no thread anchor exists (e.g. the opening event was
     never delivered), it falls back to a top-level post so the event is never
     silently dropped.
+
+    Threading is best-effort, not guaranteed. The anchor lookup is a non-atomic
+    read-modify-write (``get`` -> post -> ``set``) over the ``thread_store``,
+    and the Modal endpoint runs ``@modal.concurrent``. Two events for the same
+    booking arriving close together — or a Hookdeck redelivery — can both see
+    no anchor and each open a separate top-level thread. Events for one booking
+    are rarely simultaneous, so this is an accepted edge; a put-if-absent on the
+    store would be needed to elect a single opener deterministically.
     """
     store = thread_store if thread_store is not None else InMemoryThreadStore()
     result = ExecuteResult()

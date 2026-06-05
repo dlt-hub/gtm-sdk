@@ -1,10 +1,18 @@
 """Cal.com booking lifecycle -> Slack Block Kit messages.
 
 Mirrors the Attio op-builder structure in ``booking.py`` but renders Slack
-messages instead. Every lifecycle event for one booking shares a
-``thread_key`` (the canonical meeting uid, keyed off the *original* start time
-the same way the Attio ``external_id`` is) so Slack threads the events together:
-the BOOKING_CREATED message opens the thread and later events reply under it.
+messages instead. Each lifecycle event's ``thread_key`` is the canonical
+meeting uid for its ``(host, start)``: BOOKING_CREATED opens the thread and
+CANCELLED / RESCHEDULED reply under it because all three key off the booking's
+*original* start (CANCELLED/RESCHEDULED carry the old start under
+``startTime``).
+
+Caveat — terminal events key off the *current* start: ``MEETING_ENDED`` uses
+``payload.startTime`` and the NO_SHOW path uses the fetched ``booking.start``.
+For a booking that was rescheduled, that start differs from the original, so
+those events will land in their own thread rather than re-joining the
+BOOKING_CREATED message. This matches the Attio ``external_id`` behavior and is
+accepted; do not assume every event for a booking shares one thread.
 
 Urgent events (cancellations, attendee/host no-shows) set ``urgent=True`` so the
 dispatcher broadcasts the threaded reply back into the channel.
