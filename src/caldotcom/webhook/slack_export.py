@@ -67,7 +67,12 @@ def _blocks(
     """
     emoji = _EMOJI.get(subtype, ":bell:")
     heading = f"{emoji} {subtype.replace('_', ' ').title()}: {title}"
-    fallback = heading + " — " + "; ".join(f"{k}: {v}" for k, v in fields)
+    # Cap each field's contribution AND the final string so the fallback
+    # notification text can't blow past Slack's message size limit on an extreme
+    # cancellationReason / ratingFeedback (the section fields are capped below).
+    fallback = (heading + " — " + "; ".join(f"{k}: {v[:500]}" for k, v in fields))[
+        :3000
+    ]
     blocks: list[dict[str, Any]] = [
         {"type": "header", "text": {"type": "plain_text", "text": heading[:150]}},
     ]
