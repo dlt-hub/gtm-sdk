@@ -35,7 +35,12 @@ SOURCES: list[tuple[str, type, str]] = [
     ("rb2b", Rb2bVisitWebhook, "Rb2bVisitWebhook"),
 ]
 
-HANDLERS: list[str] = ["export_to_attio", "export_to_gcp_etl", "export_to_gcp_raw"]
+HANDLERS: list[str] = [
+    "export_to_attio",
+    "export_to_gcp_etl",
+    "export_to_gcp_raw",
+    "export_to_slack",
+]
 
 
 def _app_name_for(handler: str, model: type) -> str | None:
@@ -60,6 +65,11 @@ def _app_name_for(handler: str, model: type) -> str | None:
         if not hasattr(model, "raw_get_app_name"):
             return None
         return model.raw_get_app_name()
+
+    if handler == "export_to_slack":
+        if not hasattr(model, "slack_get_app_name"):
+            return None
+        return model.slack_get_app_name()
 
     warn(f"unknown handler {handler!r}; ignoring")
     return None

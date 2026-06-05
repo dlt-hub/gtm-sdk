@@ -150,6 +150,22 @@ class Webhook(Rb2bWebhook):
     def attio_get_app_name() -> str:
         return "export-to-attio-from-rb2b-visits"
 
+    # --- Slack export contract (not implemented for this source) ---
+    # Present so the WebhookModelProtocol conformance test passes; this source
+    # is never wired into webhooks/export_to_slack.py.
+    @staticmethod
+    def slack_get_app_name() -> str:
+        return "export-to-slack-from-rb2b-visits"
+
+    def slack_is_valid_webhook(self) -> bool:
+        return False
+
+    def slack_get_invalid_webhook_error_msg(self) -> str:
+        return "Slack export is not supported for rb2b visits"
+
+    def slack_get_messages(self) -> list[Any]:
+        return []
+
     def _attio_domain(self) -> str | None:
         return extract_domain(self.payload.website)
 

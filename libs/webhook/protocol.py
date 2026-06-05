@@ -49,6 +49,8 @@ class WebhookModelProtocol(Protocol):
       ``NotImplementedError``).
     - ``attio_*`` — Attio export handler
       (``webhooks/export_to_attio.py``).
+    - ``slack_*`` — Slack export handler
+      (``webhooks/export_to_slack.py``).
     """
 
     @staticmethod
@@ -117,6 +119,15 @@ class WebhookModelProtocol(Protocol):
 
     def attio_get_operations(self) -> list[Any]: ...
 
+    @staticmethod
+    def slack_get_app_name() -> str: ...
+
+    def slack_is_valid_webhook(self) -> bool: ...
+
+    def slack_get_invalid_webhook_error_msg(self) -> str: ...
+
+    def slack_get_messages(self) -> list[Any]: ...
+
 
 if TYPE_CHECKING:
 
@@ -181,3 +192,12 @@ if TYPE_CHECKING:
         def attio_get_invalid_webhook_error_msg(self) -> str: ...
 
         def attio_get_operations(self) -> list[Any]: ...
+
+        @staticmethod
+        def slack_get_app_name() -> str: ...
+
+        def slack_is_valid_webhook(self) -> bool: ...
+
+        def slack_get_invalid_webhook_error_msg(self) -> str: ...
+
+        def slack_get_messages(self) -> list[Any]: ...

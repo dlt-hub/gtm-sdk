@@ -562,7 +562,15 @@ class Webhook(CalcomWebhook):
         # non-NO_SHOW branches stay decoupled from Cal.com key health at
         # request time. ``_calcom_client()`` still fetches lazily inside
         # the BOOKING_NO_SHOW_UPDATED branch.
-        return ["CALCOM_API_KEY"]
+        #
+        # The Slack keys are listed here (not in ``required_api_keys``) so the
+        # Attio/GCS handlers — which share this method via the generic
+        # preflight — never hydrate them at request time. The Slack handler
+        # (``webhooks/export_to_slack.py``) hydrates ``SLACK_BOT_TOKEN`` itself
+        # and fetches ``SLACK_CHANNEL_ID`` lazily; listing both here only adds
+        # them to ``scripts/webhooks-redeploy.py``'s deploy-time existence
+        # check.
+        return ["CALCOM_API_KEY", "SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID"]
 
     @staticmethod
     def attio_get_app_name() -> str:
@@ -608,6 +616,33 @@ class Webhook(CalcomWebhook):
         # before this point. The fall-through also catches any future variant
         # we add to the union but forget to wire here.
         return []
+
+    # --- Slack export contract ---
+
+    @staticmethod
+    def slack_get_app_name() -> str:
+        return "export-to-slack-from-calcom-bookings"
+
+    def slack_is_valid_webhook(self) -> bool:
+        # Same gate as Attio: PING / MEETING_STARTED are non-actionable.
+        return _validation_result(self.payload)[0]
+
+    def slack_get_invalid_webhook_error_msg(self) -> str:
+        return _validation_result(self.payload)[1]
+
+    def slack_get_messages(self) -> list[Any]:
+        """Build Slack Block Kit messages for this booking lifecycle event.
+
+        Each event threads under the booking's BOOKING_CREATED message; urgent
+        events (cancel/no-show) broadcast back to the channel. The NO_SHOW path
+        opens a Cal.com client lazily — see ``_calcom_client``.
+        """
+        from src.caldotcom.webhook.slack_export import messages_for_payload
+
+        return messages_for_payload(
+            self.payload,
+            calcom_client_factory=self._calcom_client,
+        )
 
 
 # Keep the legacy import path working for callers that still reference
