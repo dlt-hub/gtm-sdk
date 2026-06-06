@@ -60,6 +60,16 @@ image: Image = modal.Image.debian_slim().uv_pip_install(
     # (flatsplode is in the project venv). Mirror export_to_attio.py.
     "flatsplode",
     "infisicalsdk>=1.0.16",
+    # OpenTelemetry OTLP exporter — init_log_exporter() imports these lazily,
+    # but only when telemetry is activated (HYPERDX_API_KEY / *_OTLP_ENDPOINT in
+    # the env). Since HYPERDX_API_KEY is shipped via bootstrap_secret(), the
+    # container imports them on startup and crash-loops without them. The other
+    # webhook handlers omit these only because their running images predate
+    # HYPERDX_API_KEY landing in Infisical (their telemetry stays a no-op).
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-semantic-conventions",
     "orjson",
     "slack-sdk>=3.27",
     "uuid7",
