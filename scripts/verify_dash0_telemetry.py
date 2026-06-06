@@ -23,7 +23,7 @@ from libs.logging.structured import log, set_source
 def verify_environment() -> dict[str, str]:
     """Verify required environment variables are set."""
     required = {
-        "DASH0_AUTH_TOKEN": "Dash0 authentication token",
+        "DASH0_AUTH_TOKEN": "Dash0 authentication token",  # nosec: not a password
         "DASH0_OTLP_ENDPOINT": "Dash0 OTLP endpoint (e.g., https://otel-ingest.us.dash0.com)",
     }
     optional = {

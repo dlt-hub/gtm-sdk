@@ -7,7 +7,6 @@ Tests that:
 3. Dash0 + HyperDX exporters are configured
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -32,7 +31,7 @@ def verify_collector_config():
     print("\n📋 EXPORTERS CONFIGURED\n")
     if dash0_ok:
         dash0 = exporters["otlphttp/dash0"]
-        print(f"  ✅ Dash0")
+        print("  ✅ Dash0")
         print(f"     Endpoint: {dash0['endpoint']}")
         print(f"     Dataset: {dash0['headers'].get('Dash0-Dataset', 'default')}")
     else:
@@ -40,7 +39,7 @@ def verify_collector_config():
 
     if hyperdx_ok:
         hyperdx = exporters["otlphttp/hyperdx"]
-        print(f"  ✅ HyperDX")
+        print("  ✅ HyperDX")
         print(f"     Endpoint: {hyperdx['endpoint']}")
     else:
         print("  ❌ HyperDX (token missing)")
@@ -52,15 +51,15 @@ def verify_collector_config():
 
     print(f"  Traces: {traces}")
     if dash0_ok and "otlphttp/dash0" in traces:
-        print(f"    ✅ Dash0 in traces pipeline")
+        print("    ✅ Dash0 in traces pipeline")
     if hyperdx_ok and "otlphttp/hyperdx" in traces:
-        print(f"    ✅ HyperDX in traces pipeline")
+        print("    ✅ HyperDX in traces pipeline")
 
     print(f"  Logs: {logs}")
     if dash0_ok and "otlphttp/dash0" in logs:
-        print(f"    ✅ Dash0 in logs pipeline")
+        print("    ✅ Dash0 in logs pipeline")
     if hyperdx_ok and "otlphttp/hyperdx" in logs:
-        print(f"    ✅ HyperDX in logs pipeline")
+        print("    ✅ HyperDX in logs pipeline")
 
     print("\n" + "=" * 70)
 
@@ -78,7 +77,9 @@ def verify_collector_config():
     else:
         print("\n❌ MISSING REQUIRED EXPORTERS\n")
         if not dash0_ok:
-            print("  - Dash0: Set DASH0_AUTH_TOKEN and DASH0_OTLP_ENDPOINT in Infisical")
+            print(
+                "  - Dash0: Set DASH0_AUTH_TOKEN and DASH0_OTLP_ENDPOINT in Infisical",
+            )
         if not hyperdx_ok:
             print("  - HyperDX: Set HYPERDX_API_KEY in Infisical")
         return False
@@ -92,7 +93,7 @@ def test_collector_callable():
         print("\n🔍 TESTING COLLECTOR CALLABILITY\n")
 
         try:
-            handle = modal.Function.from_name("otel-collector", "fan_out")
+            modal.Function.from_name("otel-collector", "fan_out")
             print("  ✅ Collector app found on Modal")
             print("  ✅ fan_out function is callable")
             print("  ✅ Ready to spawn telemetry")
@@ -113,7 +114,7 @@ def main():
     config_ok = verify_collector_config()
 
     # Try to reach collector
-    callable_ok = test_collector_callable()
+    test_collector_callable()
 
     if config_ok:
         print("\n" + "=" * 70)

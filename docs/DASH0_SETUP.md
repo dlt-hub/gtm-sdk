@@ -123,7 +123,7 @@ uv run scripts/verify_dash0_telemetry.py
 
 When the collector is deployed:
 
-```
+```text
 App/Webhook/CLI
     ↓ (Modal RPC spawn)
 otel-collector function (Modal)
