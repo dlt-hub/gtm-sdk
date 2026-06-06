@@ -571,6 +571,13 @@ class Webhook(CalcomWebhook):
         # so adding them would gate the Attio/GCS deploys on Slack secrets they
         # never touch. The Slack deploy gets its own preflight, scoped to
         # ``export_to_slack``, in ``scripts/webhooks-redeploy.py``.
+        #
+        # The decoupling is one-directional: the Slack preflight still iterates
+        # this source's required + optional keys, so deploying export_to_slack
+        # for caldotcom also checks ATTIO_API_KEY exists — even though the Slack
+        # path never calls Attio. Accepted: ATTIO_API_KEY is present in every
+        # env this source deploys to, and CALCOM_API_KEY *is* used by the Slack
+        # no-show branch, so the only spurious check is ATTIO_API_KEY.
         return ["CALCOM_API_KEY"]
 
     @staticmethod

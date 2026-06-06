@@ -309,6 +309,35 @@ def test_opening_message_never_broadcasts_even_if_urgent() -> None:
     assert client.calls[0]["reply_broadcast"] is False
 
 
+def test_out_of_order_fallback_becomes_thread_root() -> None:
+    """Documented best-effort edge: if a non-opening event arrives with no
+    stored anchor (opener undelivered / out-of-order), it posts top-level and
+    becomes the thread root, so a later event threads under it."""
+    client = _FakeSlackClient()
+    store = InMemoryThreadStore()
+
+    # Cancellation arrives first (no anchor yet) → top-level post, becomes root.
+    early = SlackMessage(
+        thread_key="bk9",
+        text="cancelled-first",
+        urgent=True,
+        event_subtype="cancelled",
+    )
+    execute([early], channel="C1", client=client, thread_store=store)
+    assert client.calls[0]["thread_ts"] is None
+    # Urgent but opening → must not broadcast (no thread to broadcast into).
+    assert client.calls[0]["reply_broadcast"] is False
+
+    # The real BOOKING_CREATED arrives later → threads under the fallback root.
+    late = SlackMessage(
+        thread_key="bk9",
+        text="created-late",
+        event_subtype="scheduled",
+    )
+    execute([late], channel="C1", client=client, thread_store=store)
+    assert client.calls[1]["thread_ts"] == "1.000"
+
+
 def test_post_failure_is_recorded_and_does_not_abort_batch() -> None:
     class _Boom(_FakeSlackClient):
         def chat_postMessage(self, **kwargs):  # noqa: N802
