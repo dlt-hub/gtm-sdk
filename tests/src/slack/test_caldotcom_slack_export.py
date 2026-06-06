@@ -364,6 +364,44 @@ def test_out_of_order_fallback_becomes_thread_root() -> None:
     assert client.calls[1]["thread_ts"] == "1.000"
 
 
+def test_host_is_mentioned_when_email_resolves() -> None:
+    class _ClientWithLookup(_FakeSlackClient):
+        def users_lookupByEmail(self, email: str) -> dict[str, Any]:  # noqa: N802
+            return {"user": {"id": "U999"}}
+
+    client = _ClientWithLookup()
+    msg = SlackMessage(
+        thread_key="bk",
+        text="Scheduled: call",
+        blocks=[
+            {"type": "header", "text": {"type": "plain_text", "text": "Scheduled"}},
+        ],
+        event_subtype="scheduled",
+        mention_email="host@example.com",
+    )
+    execute([msg], channel="C1", client=client, thread_store=InMemoryThreadStore())
+    sent = client.calls[0]
+    # The host is pinged in both the fallback text and a section block.
+    assert sent["text"].startswith("<@U999>")
+    assert any(
+        b.get("type") == "section" and "<@U999>" in str(b) for b in sent["blocks"]
+    )
+
+
+def test_no_mention_when_email_does_not_resolve() -> None:
+    # _FakeSlackClient has no users_lookupByEmail → lookup returns None → no
+    # mention, post proceeds unchanged (graceful degrade).
+    client = _FakeSlackClient()
+    msg = SlackMessage(
+        thread_key="bk",
+        text="Scheduled: call",
+        event_subtype="scheduled",
+        mention_email="ghost@example.com",
+    )
+    execute([msg], channel="C1", client=client, thread_store=InMemoryThreadStore())
+    assert client.calls[0]["text"] == "Scheduled: call"
+
+
 def test_post_failure_is_recorded_and_does_not_abort_batch() -> None:
     class _Boom(_FakeSlackClient):
         def chat_postMessage(self, **kwargs):  # noqa: N802

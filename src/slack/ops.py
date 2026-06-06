@@ -27,6 +27,11 @@ class SlackMessage:
       missed (cancellations, no-shows). Ignored for the thread-opening message,
       which is already a channel post.
     - ``event_subtype`` is carried for logging/observability only.
+    - ``mention_email`` is the email of the person to @-mention (the host). The
+      dispatcher resolves it to a Slack user id via ``users.lookupByEmail`` at
+      post time (the builder has no Slack client) and pings them in-message;
+      unresolvable emails (non-member / missing ``users:read.email`` scope)
+      degrade silently to no mention.
     """
 
     thread_key: str
@@ -34,3 +39,4 @@ class SlackMessage:
     blocks: list[dict[str, Any]] = field(default_factory=list)
     urgent: bool = False
     event_subtype: str = ""
+    mention_email: str | None = None

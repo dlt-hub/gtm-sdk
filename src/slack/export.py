@@ -14,9 +14,28 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from libs.logging.structured import log
-from libs.slack import post_message
+from libs.slack import lookup_user_id_by_email, post_message
 from src.slack.ops import SlackMessage
 from src.slack.thread_store import ThreadStore
+
+
+def _with_mention(
+    text: str,
+    blocks: list[dict[str, Any]],
+    user_id: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Prepend a Slack ``<@user_id>`` mention so the host is pinged. The mention
+    must live in a ``section`` (header ``plain_text`` can't notify), so insert one
+    right after the header; also prepend it to the fallback ``text`` so the push
+    notification names them."""
+    mention = f"<@{user_id}>"
+    new_blocks = list(blocks)
+    after_header = bool(new_blocks) and new_blocks[0].get("type") == "header"
+    new_blocks.insert(
+        1 if after_header else 0,
+        {"type": "section", "text": {"type": "mrkdwn", "text": mention}},
+    )
+    return f"{mention} {text}", new_blocks
 
 
 @dataclass
@@ -82,16 +101,29 @@ def execute(
     booking are rarely simultaneous and Hookdeck redelivery is infrequent).
     """
     result = ExecuteResult()
+    # Cache email -> user id across the batch so we don't repeat lookups.
+    mention_cache: dict[str, str | None] = {}
 
     for msg in messages:
         anchor = thread_store.get(msg.thread_key)
         is_opening = anchor is None
+        # Resolve the host @-mention (best-effort; never blocks the post).
+        text, blocks = msg.text, msg.blocks
+        if msg.mention_email:
+            if msg.mention_email not in mention_cache:
+                mention_cache[msg.mention_email] = lookup_user_id_by_email(
+                    client,
+                    msg.mention_email,
+                )
+            user_id = mention_cache[msg.mention_email]
+            if user_id:
+                text, blocks = _with_mention(text, msg.blocks, user_id)
         try:
             posted = post_message(
                 client,
                 channel=channel,
-                text=msg.text,
-                blocks=msg.blocks or None,
+                text=text,
+                blocks=blocks or None,
                 thread_ts=anchor,
                 reply_broadcast=msg.urgent and not is_opening,
             )

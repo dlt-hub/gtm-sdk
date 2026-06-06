@@ -166,6 +166,7 @@ def _msg_for_booking(
         blocks=blocks,
         urgent=False,
         event_subtype=subtype,
+        mention_email=host_email,
     )
 
 
@@ -203,6 +204,7 @@ def _msg_for_cancelled(
         blocks=blocks,
         urgent=True,
         event_subtype="cancelled",
+        mention_email=host_email,
     )
 
 
@@ -231,6 +233,7 @@ def _msg_for_rescheduled(
         blocks=blocks,
         urgent=False,
         event_subtype="rescheduled",
+        mention_email=host_email,
     )
 
 
@@ -255,6 +258,7 @@ def _msg_for_no_show(
         blocks=blocks,
         urgent=True,
         event_subtype="no_show_attendee",
+        mention_email=host_email,
     )
 
 
@@ -290,6 +294,7 @@ def _msg_for_meeting_ended(
         blocks=blocks,
         urgent=urgent,
         event_subtype=subtype,
+        mention_email=host_email,
     )
 
 
