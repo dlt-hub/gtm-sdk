@@ -54,6 +54,11 @@ init_log_exporter(APP_NAME)
 
 image: Image = modal.Image.debian_slim().uv_pip_install(
     "fastapi[standard]",
+    # flatsplode is pulled in transitively: the cal.com Webhook imports
+    # src.caldotcom.utils, which imports flatsplode. Without it the container
+    # crash-loops on import (ModuleNotFoundError) even though local tests pass
+    # (flatsplode is in the project venv). Mirror export_to_attio.py.
+    "flatsplode",
     "infisicalsdk>=1.0.16",
     "orjson",
     "slack-sdk>=3.27",
