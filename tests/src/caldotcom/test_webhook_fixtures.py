@@ -415,3 +415,25 @@ class TestCrossTriggerInvariant:
         created_lifecycle = _find_lifecycle(created_ops)
         cancelled_lifecycle = _find_lifecycle(cancelled_ops)
         assert created_lifecycle.external_id == cancelled_lifecycle.external_id
+
+
+def test_real_v2_created_produces_full_attio_plan() -> None:
+    """Regression for the live BOOKING_CREATED 422: the real cal.com v2 payload
+    (startTime/organizer/eventTitle, attendees without displayEmail/absent) must
+    parse and produce the full Attio plan, not just for Slack. Before the model
+    fix this raised a Pydantic ValidationError (missing ``start``)."""
+    wh = _load("api/samples/caldotcom.booking.created.v2.redacted.json")
+    assert wh.attio_is_valid_webhook(), wh.attio_get_invalid_webhook_error_msg()
+    ops = wh.attio_get_operations()
+    kinds = [type(o).__name__ for o in ops]
+    assert "UpsertMeeting" in kinds
+    _assert_host_upsert_present(ops, "attendee@example.com")
+    _find_lifecycle(ops)
+
+
+def test_real_v2_requested_is_valid_attio_noop() -> None:
+    """BOOKING_REQUESTED parses and is a valid Attio webhook but writes nothing
+    (the Attio meeting is created on confirmation, BOOKING_CREATED)."""
+    wh = _load("api/samples/caldotcom.booking.requested.v2.redacted.json")
+    assert wh.attio_is_valid_webhook()
+    assert wh.attio_get_operations() == []
