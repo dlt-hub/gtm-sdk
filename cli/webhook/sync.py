@@ -43,7 +43,7 @@ HANDLERS: list[str] = [
 ]
 
 
-def _app_name_for(handler: str, model: type) -> str | None:
+def app_name_for(handler: str, model: type) -> str | None:
     """Derive the Modal app name a given (model, handler) pair expects.
 
     Returns None if the model does not expose the method this handler needs —
@@ -81,7 +81,7 @@ def _build_handler_entry(
     deployed_apps: set[str],
     hookdeck,
 ) -> HandlerEntry:
-    app_name: str | None = _app_name_for(handler, model)
+    app_name: str | None = app_name_for(handler, model)
     if app_name is None:
         return HandlerEntry(
             handler=handler,
