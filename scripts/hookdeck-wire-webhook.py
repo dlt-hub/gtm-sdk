@@ -128,10 +128,13 @@ def main() -> int:
     connection_name = args.connection_name or app_name
     destination_name = app_name
 
+    # Hookdeck 2024-09-01: the HTTP destination URL is a top-level `url` field
+    # (matches cli/webhook/_hookdeck.py reading `d.get("url")`), NOT
+    # `config.url` — that's the 2025-07-01 shape and a 422 here.
     body = {
         "name": connection_name,
         "source": {"name": source_name},
-        "destination": {"name": destination_name, "config": {"url": modal_url}},
+        "destination": {"name": destination_name, "url": modal_url},
     }
 
     print(f"Handler:        {handler}")
