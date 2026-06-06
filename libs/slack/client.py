@@ -18,6 +18,10 @@ import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from slack_sdk import WebClient
 
 # Whole seconds — slack_sdk's WebClient.timeout is typed int. Parsing as int
 # (rather than float + int()) avoids silently truncating a sub-second override
@@ -53,7 +57,7 @@ def api_key_scope(api_key: str) -> Generator[None, None, None]:
         _api_key_var.reset(token)
 
 
-def get_client(token: str | None = None):
+def get_client(token: str | None = None) -> WebClient:
     """Build a ``slack_sdk.WebClient``. See module docstring for resolution."""
     resolved = (
         token or _api_key_var.get() or os.environ.get("SLACK_BOT_TOKEN", "")
