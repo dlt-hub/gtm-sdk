@@ -1,0 +1,75 @@
+{
+  "triggerEvent": "BOOKING_REQUESTED",
+  "createdAt": "2026-06-06T16:40:29.196Z",
+  "payload": {
+    "title": "Testing [Website API]",
+    "startTime": "2026-06-08T07:30:00.000Z",
+    "endTime": "2026-06-08T07:45:00.000Z",
+    "additionalNotes": "Testing alert",
+    "type": "testing-website-api",
+    "description": "Testing alert",
+    "eventTypeId": 4846355,
+    "hideCalendarNotes": false,
+    "hideCalendarEventDetails": false,
+    "hideOrganizerEmail": false,
+    "schedulingType": "COLLECTIVE",
+    "seatsPerTimeSlot": null,
+    "seatsShowAttendees": true,
+    "seatsShowAvailabilityCount": true,
+    "disableRescheduling": false,
+    "disableReschedulingScope": "HOST_AND_ATTENDEE",
+    "disableCancelling": false,
+    "disableCancellingScope": "HOST_AND_ATTENDEE",
+    "organizer": {
+      "id": 2182255,
+      "name": "Redacted",
+      "email": "attendee@example.com",
+      "username": "Redacted",
+      "timeZone": "Europe/Berlin",
+      "language": {
+        "locale": "en"
+      },
+      "timeFormat": "h:mma",
+      "utcOffset": 120
+    },
+    "attendees": [
+      {
+        "name": "Redacted",
+        "email": "attendee@example.com",
+        "timeZone": "America/Los_Angeles",
+        "language": {
+          "locale": "en"
+        },
+        "phoneNumber": null,
+        "bookingSeat": null,
+        "utcOffset": -420,
+        "firstName": "Redacted",
+        "lastName": "Redacted"
+      }
+    ],
+    "location": "integrations:google:meet",
+    "iCalUID": "mtZH8wiqwxUtejJxbb1hMk@Cal.com",
+    "iCalSequence": 0,
+    "requiresConfirmation": true,
+    "platformClientId": "",
+    "uid": "mtZH8wiqwxUtejJxbb1hMk",
+    "organizationId": null,
+    "cancellationReason": null,
+    "rejectionReason": null,
+    "hideBranding": true,
+    "team": {
+      "id": 170425,
+      "name": "Redacted Team",
+      "members": []
+    },
+    "bookingId": 20566692,
+    "status": "PENDING",
+    "eventTitle": "Testing [Website API]",
+    "eventDescription": "",
+    "price": 0,
+    "currency": "usd",
+    "length": 15,
+    "assignmentReason": [],
+    "triggerEvent": "BOOKING_REQUESTED"
+  }
+}

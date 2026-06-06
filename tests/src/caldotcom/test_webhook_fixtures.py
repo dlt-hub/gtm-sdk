@@ -415,3 +415,47 @@ class TestCrossTriggerInvariant:
         created_lifecycle = _find_lifecycle(created_ops)
         cancelled_lifecycle = _find_lifecycle(cancelled_ops)
         assert created_lifecycle.external_id == cancelled_lifecycle.external_id
+
+
+def test_real_v2_created_produces_full_attio_plan() -> None:
+    """Regression for the live BOOKING_CREATED 422: the real cal.com v2 payload
+    (startTime/organizer/eventTitle, attendees without displayEmail/absent) must
+    parse and produce the full Attio plan, not just for Slack. Before the model
+    fix this raised a Pydantic ValidationError (missing ``start``)."""
+    wh = _load("api/samples/caldotcom.booking.created.v2.redacted.json")
+    assert wh.attio_is_valid_webhook(), wh.attio_get_invalid_webhook_error_msg()
+    ops = wh.attio_get_operations()
+
+    # Exact op count: UpsertCompany + UpsertPerson (host) + UpsertMeeting + EmitMeetingLifecycleEvent
+    assert len(ops) == 4, (
+        f"expected 4 ops (company, person, meeting, lifecycle); got {len(ops)} "
+        f"with kinds {[type(o).__name__ for o in ops]}"
+    )
+
+    # Host upsert: specific email and domain from organizer.
+    host_email = "attendee@example.com"
+    _assert_host_upsert_present(ops, host_email)
+
+    # UpsertMeeting operation.
+    meeting_ops = [o for o in ops if isinstance(o, UpsertMeeting)]
+    assert len(meeting_ops) == 1
+    expected_ical = canonical_meeting_uid(
+        host_email=host_email,
+        start=datetime(2026, 6, 8, 7, 30, 0, tzinfo=UTC),
+    )
+    assert meeting_ops[0].external_ref.ical_uid == expected_ical
+
+    # Lifecycle event: correct subtype, external_id matching ical_uid, and details line.
+    lifecycle = _find_lifecycle(ops)
+    assert lifecycle.event_subtype == "scheduled"
+    assert lifecycle.external_id == expected_ical
+    assert host_email in lifecycle.details_line
+    assert "attendee2@example.com" in lifecycle.details_line
+
+
+def test_real_v2_requested_is_valid_attio_noop() -> None:
+    """BOOKING_REQUESTED parses and is a valid Attio webhook but writes nothing
+    (the Attio meeting is created on confirmation, BOOKING_CREATED)."""
+    wh = _load("api/samples/caldotcom.booking.requested.v2.redacted.json")
+    assert wh.attio_is_valid_webhook()
+    assert wh.attio_get_operations() == []

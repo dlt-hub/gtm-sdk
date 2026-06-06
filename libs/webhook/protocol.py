@@ -33,6 +33,12 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
+# Sentinel returned by ``slack_get_channel_secret_name()`` on sources that do
+# not support Slack export. ``cli.webhook.sync.app_name_for`` treats it as a
+# skip signal so those sources don't surface as phantom "undeployed" Slack apps
+# in the registry.
+UNSUPPORTED_SLACK_CHANNEL_SECRET: str = "UNSUPPORTED_SLACK_CHANNEL_ID"
+
 
 @runtime_checkable
 class WebhookModelProtocol(Protocol):
@@ -49,6 +55,8 @@ class WebhookModelProtocol(Protocol):
       ``NotImplementedError``).
     - ``attio_*`` — Attio export handler
       (``webhooks/export_to_attio.py``).
+    - ``slack_*`` — Slack export handler
+      (``webhooks/export_to_slack.py``).
     """
 
     @staticmethod
@@ -117,6 +125,18 @@ class WebhookModelProtocol(Protocol):
 
     def attio_get_operations(self) -> list[Any]: ...
 
+    @staticmethod
+    def slack_get_app_name() -> str: ...
+
+    @staticmethod
+    def slack_get_channel_secret_name() -> str: ...
+
+    def slack_is_valid_webhook(self) -> bool: ...
+
+    def slack_get_invalid_webhook_error_msg(self) -> str: ...
+
+    def slack_get_messages(self) -> list[Any]: ...
+
 
 if TYPE_CHECKING:
 
@@ -181,3 +201,15 @@ if TYPE_CHECKING:
         def attio_get_invalid_webhook_error_msg(self) -> str: ...
 
         def attio_get_operations(self) -> list[Any]: ...
+
+        @staticmethod
+        def slack_get_app_name() -> str: ...
+
+        @staticmethod
+        def slack_get_channel_secret_name() -> str: ...
+
+        def slack_is_valid_webhook(self) -> bool: ...
+
+        def slack_get_invalid_webhook_error_msg(self) -> str: ...
+
+        def slack_get_messages(self) -> list[Any]: ...

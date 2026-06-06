@@ -497,6 +497,7 @@ _CALLERS: dict[str, Any] = {
     "export_to_attio": _call_typed_handler,
     "export_to_gcp_etl": _call_typed_handler,
     "export_to_gcp_raw": _call_raw_handler,
+    "export_to_slack": _call_typed_handler,
 }
 
 
@@ -537,10 +538,44 @@ def _stub_raw_downstream(
     _patch_gcp_to_filesystem(module, monkeypatch, returns="ok-raw")
 
 
+def _stub_slack_downstream(
+    module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # export_to_slack._export() evaluates get_client() and
+    # modal_dict_thread_store() as arguments to execute(), so all three must be
+    # neutralized to keep the test off Slack/Modal even if hydrate() resolves a
+    # token in the (CI) environment.
+    #
+    # Defensive on the common path: _export() runs hydrate("SLACK_BOT_TOKEN") /
+    # infisical.fetch(<per-source channel key, e.g. CALCOM_SLACK_CHANNEL_ID>)
+    # *before* reaching these symbols, and
+    # the autouse api-key fixture seeds only ATTIO/CALCOM — so absent Slack keys
+    # hydrate raises, the caller's try/except swallows it, and this test
+    # exercises the received → completed(status=error) path. These patches only
+    # take effect if the env happens to provide the Slack keys. Real dispatch /
+    # threading is covered by tests/src/slack/test_caldotcom_slack_export.py.
+    class _FakeResult:
+        @staticmethod
+        def body() -> str:
+            return "ok-slack"
+
+    def _fake_execute(*_a: object, **_kw: object) -> _FakeResult:
+        return _FakeResult()
+
+    def _fake_object(*_a: object, **_kw: object) -> object:
+        return object()
+
+    monkeypatch.setattr(module, "execute", _fake_execute)
+    monkeypatch.setattr(module, "get_client", _fake_object)
+    monkeypatch.setattr(module, "modal_dict_thread_store", _fake_object)
+
+
 _STUBS: dict[str, Any] = {
     "export_to_attio": _stub_attio_downstream,
     "export_to_gcp_etl": _stub_etl_downstream,
     "export_to_gcp_raw": _stub_raw_downstream,
+    "export_to_slack": _stub_slack_downstream,
 }
 
 

@@ -41,6 +41,7 @@ from libs.caldotcom import client as caldotcom_client
 from libs.exa import client as exa_client
 from libs.linear import client as linear_client
 from libs.parallel import client as parallel_client
+from libs.slack import client as slack_client
 
 KEY_SCOPES: dict[str, Callable[[str], AbstractContextManager[None]]] = {
     "APOLLO_API_KEY": apollo_client.api_key_scope,
@@ -49,6 +50,7 @@ KEY_SCOPES: dict[str, Callable[[str], AbstractContextManager[None]]] = {
     "EXA_API_KEY": exa_client.api_key_scope,
     "LINEAR_API_KEY": linear_client.api_key_scope,
     "PARALLEL_API_KEY": parallel_client.api_key_scope,
+    "SLACK_BOT_TOKEN": slack_client.api_key_scope,
 }
 
 

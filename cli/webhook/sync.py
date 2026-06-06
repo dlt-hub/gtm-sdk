@@ -17,6 +17,7 @@ from cli.webhook.registry import (
     SourceEntry,
 )
 from libs.dlt.filesystem_gcp import CloudGoogle
+from libs.webhook.protocol import UNSUPPORTED_SLACK_CHANNEL_SECRET
 from src.caldotcom.webhook.booking import Webhook as CaldotcomBookingWebhook
 from src.fathom.webhook.call import Webhook as FathomCallWebhook
 from src.fathom.webhook.message import Webhook as FathomMessageWebhook
@@ -35,10 +36,15 @@ SOURCES: list[tuple[str, type, str]] = [
     ("rb2b", Rb2bVisitWebhook, "Rb2bVisitWebhook"),
 ]
 
-HANDLERS: list[str] = ["export_to_attio", "export_to_gcp_etl", "export_to_gcp_raw"]
+HANDLERS: list[str] = [
+    "export_to_attio",
+    "export_to_gcp_etl",
+    "export_to_gcp_raw",
+    "export_to_slack",
+]
 
 
-def _app_name_for(handler: str, model: type) -> str | None:
+def app_name_for(handler: str, model: type) -> str | None:
     """Derive the Modal app name a given (model, handler) pair expects.
 
     Returns None if the model does not expose the method this handler needs —
@@ -61,6 +67,16 @@ def _app_name_for(handler: str, model: type) -> str | None:
             return None
         return model.raw_get_app_name()
 
+    if handler == "export_to_slack":
+        if not hasattr(model, "slack_get_app_name"):
+            return None
+        # Sources that don't support Slack export return the sentinel channel
+        # key; skip them so they don't surface as phantom undeployed Slack apps
+        # in the registry (only caldotcom is actually wired to export_to_slack).
+        if model.slack_get_channel_secret_name() == UNSUPPORTED_SLACK_CHANNEL_SECRET:
+            return None
+        return model.slack_get_app_name()
+
     warn(f"unknown handler {handler!r}; ignoring")
     return None
 
@@ -71,7 +87,7 @@ def _build_handler_entry(
     deployed_apps: set[str],
     hookdeck,
 ) -> HandlerEntry:
-    app_name: str | None = _app_name_for(handler, model)
+    app_name: str | None = app_name_for(handler, model)
     if app_name is None:
         return HandlerEntry(
             handler=handler,

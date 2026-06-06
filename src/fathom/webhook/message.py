@@ -87,6 +87,26 @@ class Webhook(FathomWebhook):
     def attio_get_app_name() -> str:
         return "export-to-attio-from-fathom-messages"
 
+    # --- Slack export contract (not implemented for this source) ---
+    # Present so the WebhookModelProtocol conformance test passes; this source
+    # is never wired into webhooks/export_to_slack.py.
+    @staticmethod
+    def slack_get_app_name() -> str:
+        return "export-to-slack-from-fathom-messages"
+
+    @staticmethod
+    def slack_get_channel_secret_name() -> str:
+        return "UNSUPPORTED_SLACK_CHANNEL_ID"
+
+    def slack_is_valid_webhook(self) -> bool:
+        return False
+
+    def slack_get_invalid_webhook_error_msg(self) -> str:
+        return "Slack export is not supported for Fathom messages"
+
+    def slack_get_messages(self) -> list[Any]:
+        return []
+
     def attio_is_valid_webhook(self) -> bool:
         # Fathom "messages" are action-items / one-line follow-ups that don't
         # cleanly map to Attio yet. Returning False keeps the contract uniform

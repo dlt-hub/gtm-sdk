@@ -25,6 +25,8 @@ Rules for working in this repo. `CLAUDE.md` and `WARP.md` symlink here. The repo
 - New secret = add `"<X>_API_KEY": <x>_client.api_key_scope` to `KEY_SCOPES` in `src/secrets_bootstrap.py` (after wiring an `api_key_scope` contextvar in `libs/<x>/client.py`), then decorate the function with `@with_secrets("<X>_API_KEY")` and bind `secrets=[bootstrap_secret()]`. Do NOT use `modal.Secret.from_name(...)` — see ai-672.
 - Free tier caps the app at **8 web endpoints**. Don't silently exceed it.
 - App name resolves from the `MODAL_APP` env var (`src/modal_app.py`).
+- **Troubleshoot a deployed app via the CLI** — `infisical run --projectId "$INFISICAL_PROJECT_ID" --token "$INFISICAL_TOKEN" --env=<env> -- uv run modal app logs <app-name>` tails its logs; a crash-looping container (e.g. a dep missing from the image's `uv_pip_install` that's present in the local venv) prints its import traceback there.
+- **A webhook image's `uv_pip_install` must list every dependency the handler transitively imports** — a package present in the local venv but absent from the minimal Modal image (e.g. `flatsplode`, the `opentelemetry-*` exporter) crash-loops the container on import and is invisible to local tests; after deploy, confirm a clean startup via `modal app logs`.
 
 ## Webhook deploys
 
@@ -49,6 +51,8 @@ host. Set `DAGGER_DRY_RUN=1` to skip Dagger and invoke `infisical run -- uv run 
 Each source is a separate Modal app, so deploying one source does not redeploy the others — bump them individually after shared-code changes (e.g. `libs/dlt/`) or stale containers will keep importing removed symbols. Do not commit the substituted form; an `atexit`/signal-driven cleanup restores the placeholder even if `modal deploy` fails or the script is interrupted (Ctrl-C, SIGTERM).
 
 The contract every concrete `src/<source>/webhook/*.py` `Webhook` class must satisfy lives at `libs/webhook/protocol.py` as `WebhookModelProtocol` (a `typing.Protocol`), and `tests/libs/webhook/test_protocol_conformance.py` enforces it across all five sources. Each handler's `TYPE_CHECKING` block aliases `WebhookModelTypeCheckShim` (a concrete `BaseModel` stand-in defined alongside the Protocol) as `WebhookModelToReplace` so pyright sees the full surface — Pydantic methods (`model_rebuild`/`model_validate`) and the contract methods — in the unsubstituted source tree. New sources: extend `protocol.py` only if you add a contract method; otherwise just implement the existing surface on the new `Webhook` class and add a parametrize entry to the conformance test.
+
+**Validate webhook models against a real captured payload, not hand-authored fixtures.** A synthetic cal.com fixture (`start`/`end`/`hosts`) diverged from the real v2 shape (`startTime`/`endTime`/`organizer`, attendees without `displayEmail`/`absent`), so every test passed while live `BOOKING_CREATED` events 422'd in production (silently, for Attio too) — capture a redacted real payload as a fixture and cross-check field names + the full trigger list against cal.com's webhook reference (<https://cal.com/docs/developing/guides/automation/webhooks>); note it defines many triggers we don't yet handle (e.g. `BOOKING_REJECTED`, `BOOKING_PAID`, `FORM_SUBMITTED`).
 
 ### Scripted deploy pitfalls
 
