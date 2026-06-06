@@ -56,6 +56,7 @@ HANDLER_ALIASES: dict[str, str] = {
     "attio": "export_to_attio",
     "etl": "export_to_gcp_etl",
     "raw": "export_to_gcp_raw",
+    "slack": "export_to_slack",
 }
 
 PLACEHOLDER = "WebhookModelToReplace"
@@ -237,11 +238,13 @@ def _preflight_modal_secrets() -> None:
 
 # Keys the Slack handler needs but that are NOT declared on any source's
 # required/optional_api_keys() — doing so would gate the Attio/GCS deploys on
-# Slack secrets they never use. ``webhooks/export_to_slack.py`` hydrates
-# SLACK_BOT_TOKEN and fetches SLACK_CHANNEL_ID at request time; this list keeps
-# the deploy-time existence check, scoped to that handler only (mirrors the
-# handler-scoped GCS bucket preflight).
-_SLACK_HANDLER_API_KEYS: tuple[str, ...] = ("SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID")
+# Slack secrets they never use. SLACK_BOT_TOKEN is shared across Slack sources;
+# the target channel is per-source (each Webhook declares its own key via
+# slack_get_channel_secret_name(), e.g. CALCOM_SLACK_CHANNEL_ID), so it's
+# resolved per source in the preflight below rather than hardcoded here. This
+# keeps the deploy-time existence check scoped to export_to_slack only (mirrors
+# the handler-scoped GCS bucket preflight).
+_SLACK_HANDLER_SHARED_API_KEYS: tuple[str, ...] = ("SLACK_BOT_TOKEN",)
 
 
 def _preflight_infisical_keys(
@@ -280,9 +283,14 @@ def _preflight_infisical_keys(
     check. (See ai-4pw.)
     """
     env_slug = os.environ["INFISICAL_ENV"]
+    is_slack = handler_file.stem == "export_to_slack"
     preflight: list[str] = []
     for source in sources:
         module = _source_module_for(handler_file, source)
+        # For the Slack handler also emit the source's per-automation channel
+        # key (slack_get_channel_secret_name(), e.g. CALCOM_SLACK_CHANNEL_ID) so
+        # it's preflighted alongside the source's declared keys.
+        extra = "print(Webhook.slack_get_channel_secret_name())\n" if is_slack else ""
         keys_text = subprocess.run(
             [
                 "uv",
@@ -294,6 +302,7 @@ def _preflight_infisical_keys(
                     "for k in list(Webhook.required_api_keys()) + "
                     "list(Webhook.optional_api_keys()):\n"
                     "    print(k)\n"
+                    f"{extra}"
                 ),
             ],
             cwd=REPO_ROOT,
@@ -311,11 +320,11 @@ def _preflight_infisical_keys(
             if stripped and stripped not in preflight:
                 preflight.append(stripped)
 
-    # Handler-scoped keys: the Slack handler's secrets aren't on any source's
-    # required/optional_api_keys() (see _SLACK_HANDLER_API_KEYS), so add them
+    # Handler-scoped shared keys: SLACK_BOT_TOKEN isn't on any source's
+    # required/optional_api_keys() (see _SLACK_HANDLER_SHARED_API_KEYS), so add it
     # only when deploying export_to_slack.
-    if handler_file.stem == "export_to_slack":
-        for key in _SLACK_HANDLER_API_KEYS:
+    if is_slack:
+        for key in _SLACK_HANDLER_SHARED_API_KEYS:
             if key not in preflight:
                 preflight.append(key)
 

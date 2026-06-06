@@ -157,6 +157,10 @@ class Webhook(Rb2bWebhook):
     def slack_get_app_name() -> str:
         return "export-to-slack-from-rb2b-visits"
 
+    @staticmethod
+    def slack_get_channel_secret_name() -> str:
+        return "UNSUPPORTED_SLACK_CHANNEL_ID"
+
     def slack_is_valid_webhook(self) -> bool:
         return False
 

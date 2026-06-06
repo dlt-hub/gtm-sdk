@@ -79,9 +79,12 @@ def _export(webhook: WebhookModel) -> str:
         reason = webhook.slack_get_invalid_webhook_error_msg()
         log("webhook.validation_failed", reason=reason)
         return reason
-    # SLACK_BOT_TOKEN is bound into libs.slack's api_key_scope by hydrate;
-    # SLACK_CHANNEL_ID is a plain (non-secret-scoped) value fetched directly.
-    with hydrate("SLACK_BOT_TOKEN"), infisical.fetch("SLACK_CHANNEL_ID") as channel:
+    # SLACK_BOT_TOKEN is bound into libs.slack's api_key_scope by hydrate; the
+    # target channel is a plain value fetched directly from the per-source key
+    # the Webhook declares (e.g. CALCOM_SLACK_CHANNEL_ID) so each automation
+    # posts to its own channel.
+    channel_key = WebhookModel.slack_get_channel_secret_name()
+    with hydrate("SLACK_BOT_TOKEN"), infisical.fetch(channel_key) as channel:
         messages = webhook.slack_get_messages()
         log("webhook.validated", message_count=len(messages))
         if not messages:

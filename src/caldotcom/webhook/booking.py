@@ -563,11 +563,12 @@ class Webhook(CalcomWebhook):
         # request time. ``_calcom_client()`` still fetches lazily inside
         # the BOOKING_NO_SHOW_UPDATED branch.
         #
-        # Slack keys are deliberately NOT listed here: this method is shared by
-        # every handler's preflight (Attio/GCS/Slack), so adding them would gate
-        # the Attio/GCS deploys on Slack secrets they never touch. The Slack
-        # deploy gets its own preflight, scoped to ``export_to_slack``, in
-        # ``scripts/webhooks-redeploy.py`` (``_SLACK_HANDLER_API_KEYS``).
+        # Slack keys (SLACK_BOT_TOKEN + the per-source channel key from
+        # slack_get_channel_secret_name()) are deliberately NOT listed here:
+        # this method is shared by every handler's preflight (Attio/GCS/Slack),
+        # so adding them would gate the Attio/GCS deploys on Slack secrets they
+        # never touch. The Slack deploy gets its own preflight, scoped to
+        # ``export_to_slack``, in ``scripts/webhooks-redeploy.py``.
         return ["CALCOM_API_KEY"]
 
     @staticmethod
@@ -620,6 +621,13 @@ class Webhook(CalcomWebhook):
     @staticmethod
     def slack_get_app_name() -> str:
         return "export-to-slack-from-calcom-bookings"
+
+    @staticmethod
+    def slack_get_channel_secret_name() -> str:
+        # Per-automation channel: the Slack handler fetches THIS Infisical key
+        # for the target channel id, so each source posts to its own channel
+        # (a future source declares its own key, e.g. FATHOM_SLACK_CHANNEL_ID).
+        return "CALCOM_SLACK_CHANNEL_ID"
 
     def slack_is_valid_webhook(self) -> bool:
         # Same gate as Attio: PING / MEETING_STARTED are non-actionable.
