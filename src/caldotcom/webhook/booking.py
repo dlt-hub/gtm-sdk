@@ -456,9 +456,11 @@ def _validation_result(payload: Any) -> tuple[bool, str]:
         ok = bool(payload.userPrimaryEmail) and bool(payload.attendees)
         return ok, ("" if ok else "MEETING_ENDED missing userPrimaryEmail/attendees")
     if isinstance(payload, MeetingStartedPayload):
-        return False, "MEETING_STARTED is not Attio-actionable in this iteration"
+        # Handler-agnostic wording: this gate is shared by the Attio and Slack
+        # paths, so don't name a specific destination in the rejection string.
+        return False, "MEETING_STARTED is not actionable in this iteration"
     if isinstance(payload, PingPayload):
-        return False, "PING is a connectivity check, not an Attio-actionable event"
+        return False, "PING is a connectivity check, not an actionable event"
     return False, f"unknown Cal.com payload variant: {type(payload).__name__}"
 
 

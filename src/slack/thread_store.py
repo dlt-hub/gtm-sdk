@@ -57,6 +57,11 @@ def modal_dict_thread_store(name: str) -> _ModalDictThreadStore:
     """Build the production store from a named, lazily-created ``modal.Dict``.
 
     One Dict per Slack app keeps booking keys from colliding across sources.
+
+    Growth is unbounded by design: one entry per booking ``thread_key``, never
+    evicted (``modal.Dict`` entries persist indefinitely). This is accepted for
+    a low-volume booking notifier — one key per cal.com booking is negligible.
+    If a high-volume source is ever wired to Slack, add a TTL/prune here.
     """
     import modal
 
