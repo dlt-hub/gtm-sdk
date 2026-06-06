@@ -23,17 +23,31 @@ _ALL_PROVIDER_ENV = {
     "DASH0_OTLP_ENDPOINT": "https://ingress.us-west-2.aws.dash0.com",
     "DASH0_DATASET": "prod",
     "LOGFIRE_WRITE_TOKEN": "lf",  # nosec: B105
+    "LANGSMITH_API_KEY": "ls",  # nosec: B105
+    "LANGSMITH_PROJECT": "gtm-sdk",
 }
 
 
 def test_build_config_fans_out_to_all_providers():
     cfg = build_collector_config(_ALL_PROVIDER_ENV)
     exporters = cfg["exporters"]
-    assert set(exporters) == {"otlphttp/hyperdx", "otlphttp/dash0", "otlphttp/logfire"}
-    # Both pipelines reference every configured exporter.
+    assert set(exporters) == {
+        "otlphttp/hyperdx",
+        "otlphttp/dash0",
+        "otlphttp/logfire",
+        "otlphttp/langsmith",
+    }
+    pipelines = cfg["service"]["pipelines"]
+    # Traces fan out to every provider...
+    assert set(pipelines["traces"]["exporters"]) == set(exporters)
+    # ...but LangSmith has no OTLP logs endpoint, so the logs pipeline skips it.
+    assert set(pipelines["logs"]["exporters"]) == {
+        "otlphttp/hyperdx",
+        "otlphttp/dash0",
+        "otlphttp/logfire",
+    }
     for signal in ("traces", "logs"):
-        pipeline = cfg["service"]["pipelines"][signal]
-        assert set(pipeline["exporters"]) == set(exporters)
+        pipeline = pipelines[signal]
         assert pipeline["receivers"] == ["otlp"]
         assert pipeline["processors"] == ["batch"]
     # Receiver is bound to localhost only (no public exposure).
@@ -59,6 +73,14 @@ def test_build_config_endpoints_and_headers():
     )
     assert exp["otlphttp/dash0"]["headers"]["Dash0-Dataset"] == "prod"
     assert exp["otlphttp/logfire"]["endpoint"] == "https://logfire-us.pydantic.dev"
+    # LangSmith uses x-api-key (not Bearer) + a Langsmith-Project header.
+    assert (
+        exp["otlphttp/langsmith"]["endpoint"] == "https://api.smith.langchain.com/otel"
+    )
+    assert (
+        exp["otlphttp/langsmith"]["headers"]["x-api-key"] == "${env:LANGSMITH_API_KEY}"
+    )
+    assert exp["otlphttp/langsmith"]["headers"]["Langsmith-Project"] == "gtm-sdk"
     # Every exporter has retry + sending queue.
     for block in exp.values():
         assert block["retry_on_failure"]["enabled"] is True
@@ -72,6 +94,32 @@ def test_build_config_dash0_dataset_defaults():
     }
     cfg = build_collector_config(env)
     assert cfg["exporters"]["otlphttp/dash0"]["headers"]["Dash0-Dataset"] == "default"
+
+
+def test_build_config_langsmith_project_defaults():
+    env = {
+        "LANGSMITH_API_KEY": "ls",  # nosec: B105
+    }
+    cfg = build_collector_config(env)
+    headers = cfg["exporters"]["otlphttp/langsmith"]["headers"]
+    assert headers["Langsmith-Project"] == "gtm-sdk"
+
+
+def test_build_config_langsmith_excluded_from_logs_pipeline():
+    # LangSmith implements OTLP traces only (/otel/v1/logs 404s), so it must be
+    # absent from the logs pipeline even when other providers are present.
+    cfg = build_collector_config(_ALL_PROVIDER_ENV)
+    assert "otlphttp/langsmith" in cfg["service"]["pipelines"]["traces"]["exporters"]
+    assert "otlphttp/langsmith" not in cfg["service"]["pipelines"]["logs"]["exporters"]
+
+
+def test_build_config_langsmith_only_has_no_logs_pipeline():
+    # A LangSmith-only collector has nothing to feed the logs pipeline, which
+    # otelcol would reject if emitted empty — so it must be omitted entirely.
+    cfg = build_collector_config({"LANGSMITH_API_KEY": "ls"})  # nosec: B105
+    pipelines = cfg["service"]["pipelines"]
+    assert set(pipelines["traces"]["exporters"]) == {"otlphttp/langsmith"}
+    assert "logs" not in pipelines
 
 
 def test_build_config_subset_and_empty():
