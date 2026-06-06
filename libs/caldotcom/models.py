@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, Union
 
 import orjson
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
 # ---------- Sub-models reused across variants ----------
@@ -34,25 +34,32 @@ class EventType(BaseModel):
 
 
 class BookingHost(BaseModel):
-    """Host participant on the BOOKING_CREATED shape."""
+    """Host participant. Real cal.com v2 payloads use ``organizer`` instead and
+    omit ``hosts`` entirely, so every field beyond identity is optional and
+    ``extra="allow"`` keeps unknown keys."""
 
-    id: int
-    name: str
+    model_config = ConfigDict(extra="allow")
+
+    id: int | None = None
+    name: str | None = None
     email: str
-    displayEmail: str
-    username: str
-    timeZone: str
+    displayEmail: str | None = None
+    username: str | None = None
+    timeZone: str | None = None
 
 
 class BookingAttendee(BaseModel):
-    """Attendee on the BOOKING_CREATED shape."""
+    """Attendee. Real cal.com v2 attendees carry ``name``/``email``/``timeZone``
+    but NOT ``displayEmail``/``absent`` (those were in the synthetic fixtures),
+    so make them optional. ``timeZone`` is surfaced in the Slack card."""
 
-    name: str
+    model_config = ConfigDict(extra="allow")
+
+    name: str | None = None
     email: str
-    displayEmail: str
-    timeZone: str
-    absent: bool
-    language: str | None = None
+    displayEmail: str | None = None
+    timeZone: str | None = None
+    absent: bool = False
     phoneNumber: str | None = None
 
 
@@ -134,10 +141,22 @@ class BookingCreatedPayload(BaseModel):
 
     triggerEvent: Literal["BOOKING_CREATED"]
     uid: str
-    start: datetime
-    end: datetime
-    title: str | None = None
-    description: str | None = None
+    # Real cal.com v2 payloads send ``startTime``/``endTime``; the older
+    # synthetic fixtures used ``start``/``end``. Accept either via alias so the
+    # Python attribute stays ``start``/``end`` and downstream builders are
+    # unchanged. (This was the root cause of live BOOKING_CREATED 422s — the
+    # model required ``start`` but cal.com only sends ``startTime``.)
+    start: datetime = Field(validation_alias=AliasChoices("start", "startTime"))
+    end: datetime = Field(validation_alias=AliasChoices("end", "endTime"))
+    # Real payloads carry both ``title`` and ``eventTitle``; prefer ``title``.
+    title: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("title", "eventTitle"),
+    )
+    description: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("description", "eventDescription"),
+    )
     additionalNotes: str | None = None
     # Permissive: ``_caldotcom_status_to_attio`` normalizes unknown values
     # safely. Locking this to a Literal would reject any future Cal.com
@@ -167,6 +186,16 @@ class BookingCreatedPayload(BaseModel):
         if self.userPrimaryEmail:
             return self.userPrimaryEmail
         return None
+
+
+class BookingRequestedPayload(BookingCreatedPayload):
+    """BOOKING_REQUESTED — a booking on a "requires confirmation" event type,
+    pending host acceptance. Same payload shape as BOOKING_CREATED (startTime,
+    organizer, attendees, ...), so it inherits all fields + ``creator_email``;
+    only the discriminator differs. cal.com fires this immediately on request
+    and follows with BOOKING_CREATED once the host accepts."""
+
+    triggerEvent: Literal["BOOKING_REQUESTED"]  # type: ignore[assignment]
 
 
 class BookingCancelledPayload(BaseModel):
@@ -304,6 +333,7 @@ class PingPayload(BaseModel):
 CalcomPayload = Annotated[
     Union[
         BookingCreatedPayload,
+        BookingRequestedPayload,
         BookingCancelledPayload,
         BookingRescheduledPayload,
         BookingNoShowPayload,

@@ -28,6 +28,7 @@ from libs.caldotcom import (
     BookingCancelledPayload,
     BookingCreatedPayload,
     BookingNoShowPayload,
+    BookingRequestedPayload,
     BookingRescheduledPayload,
     MeetingEndedPayload,
 )
@@ -51,6 +52,7 @@ def _booking_url(uid: str | None) -> str | None:
 
 # Emoji per lifecycle subtype — surfaces the event at a glance in the thread.
 _EMOJI: dict[str, str] = {
+    "requested": ":hourglass_flowing_sand:",
     "scheduled": ":calendar:",
     "rescheduled": ":arrows_counterclockwise:",
     "cancelled": ":x:",
@@ -66,8 +68,18 @@ def _fmt_time(dt: datetime | None) -> str:
     return dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _attendee_emails(attendees: list[Any]) -> list[str]:
-    return [a.email for a in attendees if getattr(a, "email", None)]
+def _attendees_with_tz(attendees: list[Any]) -> str:
+    """Render attendees as ``email (timezone)`` so the on-call host sees the
+    attendee's local time zone at a glance. Falls back to just the email when
+    cal.com omits the time zone."""
+    parts: list[str] = []
+    for a in attendees:
+        email = getattr(a, "email", None)
+        if not email:
+            continue
+        tz = getattr(a, "timeZone", None)
+        parts.append(f"{email} ({tz})" if tz else email)
+    return ", ".join(parts) or "(none)"
 
 
 def _blocks(
@@ -123,16 +135,22 @@ def _blocks(
     return fallback, blocks
 
 
-def _msg_for_created(payload: BookingCreatedPayload, host_email: str) -> SlackMessage:
+def _msg_for_booking(
+    payload: BookingCreatedPayload,
+    host_email: str,
+    *,
+    subtype: str,
+) -> SlackMessage:
+    """Shared builder for BOOKING_CREATED ('scheduled') and BOOKING_REQUESTED
+    ('requested') — identical payload shape, only the lifecycle label differs."""
     title = payload.title or "Cal.com Booking"
-    attendees = ", ".join(_attendee_emails(payload.attendees)) or "(none)"
     fallback, blocks = _blocks(
-        subtype="scheduled",
+        subtype=subtype,
         title=title,
         fields=[
             ("Host", host_email),
             ("When", f"{_fmt_time(payload.start)} → {_fmt_time(payload.end)}"),
-            ("Attendees", attendees),
+            ("Attendees", _attendees_with_tz(payload.attendees)),
         ],
         booking_url=_booking_url(payload.uid),
     )
@@ -141,8 +159,19 @@ def _msg_for_created(payload: BookingCreatedPayload, host_email: str) -> SlackMe
         text=fallback,
         blocks=blocks,
         urgent=False,
-        event_subtype="scheduled",
+        event_subtype=subtype,
     )
+
+
+def _msg_for_created(payload: BookingCreatedPayload, host_email: str) -> SlackMessage:
+    return _msg_for_booking(payload, host_email, subtype="scheduled")
+
+
+def _msg_for_requested(payload: BookingCreatedPayload, host_email: str) -> SlackMessage:
+    # BOOKING_REQUESTED shares BookingCreatedPayload's shape (subclass), so the
+    # same builder works; the thread_key (canonical uid off start) matches the
+    # eventual BOOKING_CREATED, so the confirmation threads under the request.
+    return _msg_for_booking(payload, host_email, subtype="requested")
 
 
 def _msg_for_cancelled(
@@ -270,6 +299,11 @@ def messages_for_payload(
     fetch the underlying booking for host email + start). Mirrors
     ``Webhook._calcom_client`` so tests can inject a fake.
     """
+    # BookingRequestedPayload subclasses BookingCreatedPayload, so it MUST be
+    # checked first or a requested booking would render as 'scheduled'.
+    if isinstance(payload, BookingRequestedPayload):
+        host = payload.creator_email()
+        return [_msg_for_requested(payload, host)] if host else []
     if isinstance(payload, BookingCreatedPayload):
         host = payload.creator_email()
         return [_msg_for_created(payload, host)] if host else []

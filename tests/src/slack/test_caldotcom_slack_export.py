@@ -57,6 +57,32 @@ def test_created_includes_view_in_calcom_link_button() -> None:
     assert button["url"].startswith("https://")
 
 
+def test_real_v2_created_parses_and_renders_with_attendee_timezone() -> None:
+    """Regression for the live 422: the real cal.com v2 BOOKING_CREATED payload
+    uses startTime/organizer/eventTitle (not start/hosts), and attendees omit
+    displayEmail/absent. It must parse and render a 'scheduled' card whose
+    Attendees field includes the attendee's time zone."""
+    msgs = _messages("api/samples/caldotcom.booking.created.v2.redacted.json")
+    assert len(msgs) == 1
+    assert msgs[0].event_subtype == "scheduled"
+    section = next(b for b in msgs[0].blocks if b["type"] == "section")
+    attendees_field = next(
+        f["text"] for f in section["fields"] if f["text"].startswith("*Attendees*")
+    )
+    assert "America/Los_Angeles" in attendees_field
+    assert any(b["type"] == "actions" for b in msgs[0].blocks)  # deeplink button
+
+
+def test_booking_requested_renders_as_requested_and_threads_with_created() -> None:
+    created = _messages("api/samples/caldotcom.booking.created.v2.redacted.json")[0]
+    requested = _messages("api/samples/caldotcom.booking.requested.v2.redacted.json")
+    assert len(requested) == 1
+    assert requested[0].event_subtype == "requested"
+    assert requested[0].urgent is False
+    # Same booking (same host+start) → confirmation threads under the request.
+    assert requested[0].thread_key == created.thread_key
+
+
 def test_cancelled_is_urgent() -> None:
     msgs = _messages("api/samples/caldotcom.booking.cancelled.redacted.json")
     assert len(msgs) == 1

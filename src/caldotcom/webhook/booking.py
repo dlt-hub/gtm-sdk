@@ -44,6 +44,7 @@ from libs.caldotcom import (
     BookingCancelledPayload,
     BookingCreatedPayload,
     BookingNoShowPayload,
+    BookingRequestedPayload,
     BookingRescheduledPayload,
     MeetingEndedPayload,
     MeetingStartedPayload,
@@ -609,6 +610,12 @@ class Webhook(CalcomWebhook):
 
     def attio_get_operations(self) -> list[AttioOp]:
         payload = self.payload
+        # BOOKING_REQUESTED (a pending, unconfirmed booking) subclasses
+        # BookingCreatedPayload, so it must be handled BEFORE the created check.
+        # It's a valid webhook (no 422) but writes nothing to Attio — the Attio
+        # meeting is created when the host confirms and BOOKING_CREATED fires.
+        if isinstance(payload, BookingRequestedPayload):
+            return []
         if isinstance(payload, BookingCreatedPayload):
             return _ops_for_created(payload, self.createdAt)
         if isinstance(payload, BookingCancelledPayload):
