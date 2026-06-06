@@ -44,6 +44,19 @@ def test_created_produces_non_urgent_opening_message() -> None:
     assert msg.text
 
 
+def test_created_includes_view_in_calcom_link_button() -> None:
+    msgs = _messages("api/samples/caldotcom.booking.created.redacted.json")
+    actions = next(
+        (b for b in msgs[0].blocks if b["type"] == "actions"),
+        None,
+    )
+    assert actions is not None, "expected an actions block with the deeplink button"
+    button = actions["elements"][0]
+    assert button["text"]["text"] == "View in Cal.com"
+    assert button["url"].endswith("/booking/calcom-booking-abc123")
+    assert button["url"].startswith("https://")
+
+
 def test_cancelled_is_urgent() -> None:
     msgs = _messages("api/samples/caldotcom.booking.cancelled.redacted.json")
     assert len(msgs) == 1

@@ -20,6 +20,7 @@ dispatcher broadcasts the threaded reply back into the channel.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any
 
@@ -32,6 +33,21 @@ from libs.caldotcom import (
 )
 from libs.meetings import canonical_meeting_uid
 from src.slack.ops import SlackMessage
+
+# cal.com booking-detail page base. Defaults to cal.com cloud; override via env
+# for a self-hosted instance or org domain. The deployed Modal container only
+# sees this if it's injected (bootstrap secret / Modal env) — the default is
+# correct for cal.com cloud, so no config is needed there.
+CALCOM_APP_BASE_URL: str = os.environ.get(
+    "CALCOM_APP_BASE_URL",
+    "https://app.cal.com",
+).rstrip("/")
+
+
+def _booking_url(uid: str | None) -> str | None:
+    """cal.com booking-detail deeplink for a booking uid, or None if absent."""
+    return f"{CALCOM_APP_BASE_URL}/booking/{uid}" if uid else None
+
 
 # Emoji per lifecycle subtype — surfaces the event at a glance in the thread.
 _EMOJI: dict[str, str] = {
@@ -59,11 +75,14 @@ def _blocks(
     subtype: str,
     title: str,
     fields: list[tuple[str, str]],
+    booking_url: str | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Return ``(fallback_text, blocks)`` for a lifecycle event.
 
     ``fallback_text`` is the Slack notification/accessibility string; the blocks
-    render a header + a two-column field grid.
+    render a header + a two-column field grid, plus a "View in Cal.com" link
+    button when ``booking_url`` is set (a plain URL button — no interactivity
+    backend needed).
     """
     emoji = _EMOJI.get(subtype, ":bell:")
     heading = f"{emoji} {subtype.replace('_', ' ').title()}: {title}"
@@ -88,6 +107,19 @@ def _blocks(
                 ],
             },
         )
+    if booking_url:
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "View in Cal.com"},
+                        "url": booking_url,
+                    },
+                ],
+            },
+        )
     return fallback, blocks
 
 
@@ -102,6 +134,7 @@ def _msg_for_created(payload: BookingCreatedPayload, host_email: str) -> SlackMe
             ("When", f"{_fmt_time(payload.start)} → {_fmt_time(payload.end)}"),
             ("Attendees", attendees),
         ],
+        booking_url=_booking_url(payload.uid),
     )
     return SlackMessage(
         thread_key=canonical_meeting_uid(host_email=host_email, start=payload.start),
@@ -124,6 +157,7 @@ def _msg_for_cancelled(
             ("Cancelled by", payload.cancelledBy or "?"),
             ("Reason", payload.cancellationReason or "(none given)"),
         ],
+        booking_url=_booking_url(payload.uid),
     )
     return SlackMessage(
         thread_key=canonical_meeting_uid(
@@ -150,6 +184,7 @@ def _msg_for_rescheduled(
             ("New start", _fmt_time(payload.rescheduleStartTime)),
             ("By", payload.rescheduledBy or "?"),
         ],
+        booking_url=_booking_url(payload.uid),
     )
     return SlackMessage(
         # Keyed off the OLD start so it threads under the original booking.
@@ -168,6 +203,7 @@ def _msg_for_no_show(
     host_email: str,
     start: datetime,
     no_show_emails: list[str],
+    booking_uid: str | None,
 ) -> SlackMessage:
     fallback, blocks = _blocks(
         subtype="no_show_attendee",
@@ -176,6 +212,7 @@ def _msg_for_no_show(
             ("Host", host_email),
             ("No-show attendees", ", ".join(no_show_emails) or "(none)"),
         ],
+        booking_url=_booking_url(booking_uid),
     )
     return SlackMessage(
         thread_key=canonical_meeting_uid(host_email=host_email, start=start),
@@ -207,6 +244,7 @@ def _msg_for_meeting_ended(
         subtype=subtype,
         title=payload.title or "Cal.com Booking",
         fields=fields,
+        booking_url=_booking_url(payload.uid),
     )
     return SlackMessage(
         thread_key=canonical_meeting_uid(
@@ -252,7 +290,9 @@ def messages_for_payload(
         host = booking.creator_email()
         if not host:
             return []
-        return [_msg_for_no_show(host, booking.start, no_show_emails)]
+        return [
+            _msg_for_no_show(host, booking.start, no_show_emails, payload.bookingUid),
+        ]
     if isinstance(payload, MeetingEndedPayload):
         host = payload.userPrimaryEmail
         return [_msg_for_meeting_ended(payload, host)] if host else []
