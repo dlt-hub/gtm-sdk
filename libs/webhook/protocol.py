@@ -33,6 +33,12 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
+# Sentinel returned by ``slack_get_channel_secret_name()`` on sources that do
+# not support Slack export. ``cli.webhook.sync.app_name_for`` treats it as a
+# skip signal so those sources don't surface as phantom "undeployed" Slack apps
+# in the registry.
+UNSUPPORTED_SLACK_CHANNEL_SECRET: str = "UNSUPPORTED_SLACK_CHANNEL_ID"
+
 
 @runtime_checkable
 class WebhookModelProtocol(Protocol):

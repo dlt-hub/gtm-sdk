@@ -17,6 +17,7 @@ from cli.webhook.registry import (
     SourceEntry,
 )
 from libs.dlt.filesystem_gcp import CloudGoogle
+from libs.webhook.protocol import UNSUPPORTED_SLACK_CHANNEL_SECRET
 from src.caldotcom.webhook.booking import Webhook as CaldotcomBookingWebhook
 from src.fathom.webhook.call import Webhook as FathomCallWebhook
 from src.fathom.webhook.message import Webhook as FathomMessageWebhook
@@ -68,6 +69,11 @@ def app_name_for(handler: str, model: type) -> str | None:
 
     if handler == "export_to_slack":
         if not hasattr(model, "slack_get_app_name"):
+            return None
+        # Sources that don't support Slack export return the sentinel channel
+        # key; skip them so they don't surface as phantom undeployed Slack apps
+        # in the registry (only caldotcom is actually wired to export_to_slack).
+        if model.slack_get_channel_secret_name() == UNSUPPORTED_SLACK_CHANNEL_SECRET:
             return None
         return model.slack_get_app_name()
 

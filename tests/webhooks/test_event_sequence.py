@@ -548,7 +548,8 @@ def _stub_slack_downstream(
     # token in the (CI) environment.
     #
     # Defensive on the common path: _export() runs hydrate("SLACK_BOT_TOKEN") /
-    # infisical.fetch("SLACK_CHANNEL_ID") *before* reaching these symbols, and
+    # infisical.fetch(<per-source channel key, e.g. CALCOM_SLACK_CHANNEL_ID>)
+    # *before* reaching these symbols, and
     # the autouse api-key fixture seeds only ATTIO/CALCOM — so absent Slack keys
     # hydrate raises, the caller's try/except swallows it, and this test
     # exercises the received → completed(status=error) path. These patches only
