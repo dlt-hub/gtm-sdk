@@ -35,7 +35,7 @@
     "attendees": [
       {
         "name": "Redacted",
-        "email": "attendee@example.com",
+        "email": "attendee2@example.com",
         "timeZone": "America/Los_Angeles",
         "language": {
           "locale": "en"

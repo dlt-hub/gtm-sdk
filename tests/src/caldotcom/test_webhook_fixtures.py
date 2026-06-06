@@ -425,10 +425,32 @@ def test_real_v2_created_produces_full_attio_plan() -> None:
     wh = _load("api/samples/caldotcom.booking.created.v2.redacted.json")
     assert wh.attio_is_valid_webhook(), wh.attio_get_invalid_webhook_error_msg()
     ops = wh.attio_get_operations()
-    kinds = [type(o).__name__ for o in ops]
-    assert "UpsertMeeting" in kinds
-    _assert_host_upsert_present(ops, "attendee@example.com")
-    _find_lifecycle(ops)
+
+    # Exact op count: UpsertCompany + UpsertPerson (host) + UpsertMeeting + EmitMeetingLifecycleEvent
+    assert len(ops) == 4, (
+        f"expected 4 ops (company, person, meeting, lifecycle); got {len(ops)} "
+        f"with kinds {[type(o).__name__ for o in ops]}"
+    )
+
+    # Host upsert: specific email and domain from organizer.
+    host_email = "attendee@example.com"
+    _assert_host_upsert_present(ops, host_email)
+
+    # UpsertMeeting operation.
+    meeting_ops = [o for o in ops if isinstance(o, UpsertMeeting)]
+    assert len(meeting_ops) == 1
+    expected_ical = canonical_meeting_uid(
+        host_email=host_email,
+        start=datetime(2026, 6, 8, 7, 30, 0, tzinfo=UTC),
+    )
+    assert meeting_ops[0].external_ref.ical_uid == expected_ical
+
+    # Lifecycle event: correct subtype, external_id matching ical_uid, and details line.
+    lifecycle = _find_lifecycle(ops)
+    assert lifecycle.event_subtype == "scheduled"
+    assert lifecycle.external_id == expected_ical
+    assert host_email in lifecycle.details_line
+    assert "attendee2@example.com" in lifecycle.details_line
 
 
 def test_real_v2_requested_is_valid_attio_noop() -> None:
