@@ -110,7 +110,18 @@ def _export(webhook: WebhookModel) -> str:
             client=get_client(),
             thread_store=modal_dict_thread_store(_THREAD_STORE_NAME),
         )
-        return result.body()
+        body = result.body()
+        # At-least-once: if any message failed to post, raise so the endpoint
+        # returns non-2xx and Hookdeck redelivers (a transient Slack 5xx/timeout
+        # must not silently drop a booking notification). Each cal.com event
+        # yields exactly one message, so a retry cannot duplicate an already-
+        # delivered one. `execute` itself never raises — it records every
+        # outcome — so this is the single place the delivery contract is set.
+        if any(not o.ok for o in result.outcomes):
+            log("webhook.slack_delivery_failed", body=body)
+            msg = f"Slack delivery failed; returning error for Hookdeck retry: {body}"
+            raise RuntimeError(msg)
+        return body
 
 
 def _handle(webhook: WebhookModel, request: Request) -> str:
