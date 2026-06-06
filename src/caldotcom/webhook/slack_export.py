@@ -46,8 +46,14 @@ CALCOM_APP_BASE_URL: str = os.environ.get(
 
 
 def _booking_url(uid: str | None) -> str | None:
-    """cal.com booking-detail deeplink for a booking uid, or None if absent."""
-    return f"{CALCOM_APP_BASE_URL}/booking/{uid}" if uid else None
+    """cal.com bookings deeplink for a booking uid, or None if absent.
+
+    Uses the ``/bookings/?uid=`` list route rather than ``/booking/<uid>``: cal.com
+    redirects it to the correct tab (upcoming / unconfirmed / past / cancelled)
+    based on the booking's current state, so one link works for every lifecycle
+    event (a requested booking lands on 'unconfirmed', a cancelled one on
+    'cancelled', etc.)."""
+    return f"{CALCOM_APP_BASE_URL}/bookings/?uid={uid}" if uid else None
 
 
 # Emoji per lifecycle subtype — surfaces the event at a glance in the thread.

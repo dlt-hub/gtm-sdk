@@ -53,7 +53,7 @@ def test_created_includes_view_in_calcom_link_button() -> None:
     assert actions is not None, "expected an actions block with the deeplink button"
     button = actions["elements"][0]
     assert button["text"]["text"] == "View in Cal.com"
-    assert button["url"].endswith("/booking/calcom-booking-abc123")
+    assert button["url"].endswith("/bookings/?uid=calcom-booking-abc123")
     assert button["url"].startswith("https://")
 
 
