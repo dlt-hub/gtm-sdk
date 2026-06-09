@@ -181,7 +181,10 @@ def test_build_core_person_values_emits_github_handle_and_url() -> None:
         github_url="https://github.com/elviskahoro",
     )
     values = build_core_person_values(pi)
-    assert values["github_handle"] == ["elviskahoro"]
+    # The handle writes to the `github` slug (active in dev+prod); the
+    # `github_handle` slug is archived in prod and deprecated. See ai-0jg.
+    assert values["github"] == ["elviskahoro"]
+    assert "github_handle" not in values
     assert values["github_url"] == ["https://github.com/elviskahoro"]
 
 
@@ -206,12 +209,13 @@ def test_attio_request_model_rejects_bare_string_text_value() -> None:
     the regression test above actually exercises the list requirement.
     """
     with pytest.raises(ValidationError):
-        build_post_record_request({"github_handle": "elviskahoro"})
+        build_post_record_request({"github": "elviskahoro"})
 
 
 def test_build_core_person_values_skips_github_when_absent() -> None:
     pi = PersonInput(email="a@example.com")
     values = build_core_person_values(pi)
+    assert "github" not in values
     assert "github_handle" not in values
     assert "github_url" not in values
 

@@ -23,17 +23,17 @@ class _FakeSDKError(Exception):
 
 
 def test_schema_mismatch_classifies_as_schema_mismatch() -> None:
-    # A missing filter attribute (github_handle pre-bootstrap) is translated to
-    # SchemaMismatchError at the lib boundary; classify_error must bucket it as
+    # A missing filter attribute (e.g. `github` if archived/absent) is translated
+    # to SchemaMismatchError at the lib boundary; classify_error must bucket it as
     # `schema_mismatch` (not the catch-all `unknown_error`) and preserve the
     # field for an actionable envelope (ai-0ex).
     err = SchemaMismatchError(
-        "people object has no filter attribute 'github_handle'",
-        field="github_handle",
+        "people object has no filter attribute 'github'",
+        field="github",
     )
     classified = classify_error(err)
     assert classified.code == "schema_mismatch"
-    assert classified.field == "github_handle"
+    assert classified.field == "github"
 
 
 def test_permission_message_classifies_as_insufficient_scope() -> None:

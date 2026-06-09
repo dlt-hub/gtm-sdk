@@ -72,8 +72,8 @@ def test_github_plan_mention_lands_when_person_upsert_fails() -> None:
 
     def _person_blows_up(*_args, **_kwargs):
         raise SchemaMismatchError(
-            "people object has no filter attribute 'github_handle'",
-            field="github_handle",
+            "people object has no filter attribute 'github'",
+            field="github",
         )
 
     with (

@@ -296,8 +296,8 @@ def test_handle_upsert_person_schema_mismatch_is_classified(monkeypatch) -> None
 
     def boom(*_args, **_kwargs):
         raise SchemaMismatchError(
-            "people object has no filter attribute 'github_handle'",
-            field="github_handle",
+            "people object has no filter attribute 'github'",
+            field="github",
         )
 
     monkeypatch.setattr("src.attio.export.libs_upsert_person", boom)

@@ -405,10 +405,14 @@ def build_core_person_values(
         values["linkedin"] = linkedin
 
     if input.github_handle:
+        # Write the handle to the `github` Attio slug — the attribute that is
+        # ACTIVE on the people object in both dev and prod. The `github_handle`
+        # slug is archived in prod (and being deprecated), so writing to it 422s
+        # with "Cannot find attribute github_handle". The PersonInput field keeps
+        # the conceptual `github_handle` name; only the Attio slug is `github`.
         # Attio text attributes require a list value (mirrors `linkedin` above,
-        # which `format_linkedin` returns as list[str]). A bare string fails the
-        # SDK's PostV2ObjectsObjectRecordsDataRequest validation. See ai-bw6.
-        values["github_handle"] = [input.github_handle]
+        # which `format_linkedin` returns as list[str]). See ai-0jg / ai-bw6.
+        values["github"] = [input.github_handle]
     if input.github_url:
         values["github_url"] = [input.github_url]
 

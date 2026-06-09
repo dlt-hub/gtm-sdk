@@ -269,9 +269,9 @@ def _handle_upsert_person(
             matching_attribute=op.matching_attribute,
         )
     except SchemaMismatchError as exc:
-        # A matching attribute that the people object doesn't define (e.g.
-        # `github_handle` before the schema is bootstrapped) surfaces from the
-        # lib layer as a typed SchemaMismatchError. Classify it as a normal
+        # A matching attribute that the people object doesn't define (e.g. the
+        # `github` slug if it were archived/absent) surfaces from the lib layer
+        # as a typed SchemaMismatchError. Classify it as a normal
         # `schema_mismatch` failed envelope instead of letting the dispatcher's
         # catch-all tag it `handler_exception` (ai-0ex). When this op is
         # `optional`, execute() keeps going and the mention still lands.
@@ -655,7 +655,7 @@ def _handle_upsert_mention(
             # Opted-in best-effort link (octolens): the mention is the primary
             # record and the person is enrichment, so when the related person
             # could not be resolved (e.g. its optional UpsertPerson failed
-            # because the people object lacks a `github_handle` attribute) write
+            # because the people object lacks the `github` attribute) write
             # the mention WITHOUT the link rather than dropping it — silent data
             # loss is the bug this fixes (ai-0ex).
             degrade_warnings.append(

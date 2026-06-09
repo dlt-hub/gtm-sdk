@@ -68,17 +68,18 @@ def test_upsert_person_email_match_unchanged(mock_add, mock_search) -> None:
 
 @patch("libs.attio.people.get_client")
 def test_search_people_raw_translates_unknown_filter_attribute(mock_get_client) -> None:
-    """Querying people by an undefined slug (github_handle pre-bootstrap) yields
-    a `filter_error` the SDK can't unmarshal; _search_people_raw must surface a
-    typed SchemaMismatchError, not a raw ResponseValidationError (ai-0ex)."""
+    """Querying people by an undefined slug (the `github` slug if archived/absent)
+    yields a `filter_error` the SDK can't unmarshal; _search_people_raw must
+    surface a typed SchemaMismatchError, not a raw ResponseValidationError
+    (ai-0ex). The github handle is searched via the `github` Attio slug (ai-0jg)."""
     client = mock_get_client.return_value.__enter__.return_value
     client.records.post_v2_objects_object_records_query.side_effect = _ErrWithBody(
         '{"status_code": 400, "type": "invalid_request_error",'
         ' "code": "unknown_filter_attribute_slug", "message": "Unknown attribute'
-        ' slug: github_handle"}',
+        ' slug: github"}',
     )
 
     with pytest.raises(SchemaMismatchError) as exc_info:
         _search_people_raw(github_handle="elviskahoro")
 
-    assert exc_info.value.field == "github_handle"
+    assert exc_info.value.field == "github"
