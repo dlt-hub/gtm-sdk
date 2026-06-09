@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+from pydantic import ValidationError
+
 from libs.attio.models import MentionInput, PersonInput
+from libs.attio.sdk_boundary import build_post_record_request
 from libs.attio.values import (
     build_core_person_values,
     build_mention_values,
@@ -177,8 +181,32 @@ def test_build_core_person_values_emits_github_handle_and_url() -> None:
         github_url="https://github.com/elviskahoro",
     )
     values = build_core_person_values(pi)
-    assert values["github_handle"] == "elviskahoro"
-    assert values["github_url"] == "https://github.com/elviskahoro"
+    assert values["github_handle"] == ["elviskahoro"]
+    assert values["github_url"] == ["https://github.com/elviskahoro"]
+
+
+def test_build_core_person_values_passes_real_attio_request_model() -> None:
+    """Regression for ai-bw6: github_handle/github_url must satisfy the real
+    Attio SDK request model (text attrs require list values), not just our
+    dict shape. A bare-string assignment fails here, not silently in prod —
+    the "validate against the real model, not hand-authored fixtures" gotcha.
+    """
+    pi = PersonInput(
+        github_handle="elviskahoro",
+        github_url="https://github.com/elviskahoro",
+    )
+    values = build_core_person_values(pi)
+    # Raises pydantic ValidationError if any text value is a bare string.
+    build_post_record_request(values)
+
+
+def test_attio_request_model_rejects_bare_string_text_value() -> None:
+    """Locks in the SDK contract that drove ai-bw6: a text attribute assigned a
+    bare string (the original bug shape) must fail the request model, proving
+    the regression test above actually exercises the list requirement.
+    """
+    with pytest.raises(ValidationError):
+        build_post_record_request({"github_handle": "elviskahoro"})
 
 
 def test_build_core_person_values_skips_github_when_absent() -> None:

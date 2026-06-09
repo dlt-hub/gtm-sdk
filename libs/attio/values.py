@@ -405,9 +405,12 @@ def build_core_person_values(
         values["linkedin"] = linkedin
 
     if input.github_handle:
-        values["github_handle"] = input.github_handle
+        # Attio text attributes require a list value (mirrors `linkedin` above,
+        # which `format_linkedin` returns as list[str]). A bare string fails the
+        # SDK's PostV2ObjectsObjectRecordsDataRequest validation. See ai-bw6.
+        values["github_handle"] = [input.github_handle]
     if input.github_url:
-        values["github_url"] = input.github_url
+        values["github_url"] = [input.github_url]
 
     return values
 
