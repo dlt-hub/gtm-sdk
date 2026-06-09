@@ -10,6 +10,9 @@ dependencies = [
   "attio>=0.22.8",
   "boto3>=1.42.95",
   "dlt[duckdb,motherduck]>=1.0",
+  # Imported directly by libs/motherduck (md: connections). Already transitive
+  # via dlt[duckdb], but declared explicitly since we import the package.
+  "duckdb>=1.0",
   "exa-py>=1.0",
   "fastapi[standard]",
   "flatsplode>=0.2.0",
