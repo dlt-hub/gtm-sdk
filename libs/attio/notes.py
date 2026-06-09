@@ -4,9 +4,24 @@ from typing import Any
 
 from libs.attio.client import get_client
 from libs.attio.contracts import ReliabilityEnvelope
-from libs.attio.errors import AttioNotFoundError, AttioValidationError
+from libs.attio.errors import AttioError, AttioNotFoundError, AttioValidationError
 from libs.attio.models import NoteInput, NoteResult
 from libs.attio.sdk_boundary import build_post_note_request, model_dump_or_empty
+
+# Attio's notes LIST endpoint returns a single short page (server default) and
+# exposes no sort parameter, so a newly-written note can sort *past* page 1 for a
+# heavily-reused parent (e.g. a Fireflies notetaker carrying dozens of notes).
+# The (title, meeting_id) dedup in ``src/attio/export.py`` must observe EVERY
+# existing note or it recreates duplicates — exactly the path the Fathom backfill
+# hits when an intermittent Fathom 502 forces a restart over already-written
+# recordings (ai-crf). So ``list_notes_for_parent`` paginates exhaustively.
+_NOTES_PAGE_SIZE = 50
+# Backstop against a pathological parent (or a server that ignores ``offset`` and
+# loops forever): 10k notes is far beyond any real record. Hitting it means we
+# could NOT observe every note, so the dedup paths must fail closed (raise) rather
+# than return a truncated list — silently truncating would reopen the exact
+# duplicate-note hole this fix closes.
+_NOTES_MAX_PAGES = 200
 
 
 def _resolve_parent_record_id(
@@ -110,16 +125,57 @@ def _extract_result(note: Any) -> NoteResult:
     )
 
 
+def _paginate_raw_notes(
+    client: Any,
+    parent_object: str,
+    parent_record_id: str,
+) -> Any:
+    """Yield every raw SDK note for a parent, walking ``offset`` pages.
+
+    Shared by both dedup paths (``list_notes_for_parent`` and
+    ``find_note_by_title``). Walks pages of ``_NOTES_PAGE_SIZE`` until a short
+    (final) page arrives; see the module-level note for why exhaustive paging is
+    a correctness requirement.
+    """
+    offset = 0
+    # ``_NOTES_MAX_PAGES`` bounds full pages; the ``+ 1`` is a confirming probe so a
+    # parent whose note count is an exact multiple of the page size (e.g. exactly
+    # ``_NOTES_MAX_PAGES * _NOTES_PAGE_SIZE`` notes — 200 full pages) is drained by
+    # the short/empty page that follows instead of false-failing at the boundary.
+    for _ in range(_NOTES_MAX_PAGES + 1):
+        response = client.notes.get_v2_notes(
+            parent_object=parent_object,
+            parent_record_id=parent_record_id,
+            limit=_NOTES_PAGE_SIZE,
+            offset=offset,
+        )
+        batch = list(response.data)
+        yield from batch
+        if len(batch) < _NOTES_PAGE_SIZE:
+            return
+        offset += _NOTES_PAGE_SIZE
+    # Still full after the confirming probe: a server ignoring ``offset`` (or a
+    # parent beyond the cap) would loop forever. We cannot guarantee we saw every
+    # note, so fail closed. Returning here would let the (title, meeting_id) dedup
+    # miss a match and recreate a duplicate — the bug this fix exists to prevent.
+    msg = (
+        f"notes pagination hit the {_NOTES_MAX_PAGES}-page cap "
+        f"(>{_NOTES_MAX_PAGES * _NOTES_PAGE_SIZE} notes) for "
+        f"{parent_object}/{parent_record_id}; cannot guarantee complete dedup"
+    )
+    raise AttioError(msg)
+
+
 def list_notes_for_parent(
     parent_object: str,
     parent_record_id: str,
 ) -> list[NoteResult]:
+    """Return ALL notes on a parent record, paginating until the list is drained."""
     with get_client() as client:
-        response = client.notes.get_v2_notes(
-            parent_object=parent_object,
-            parent_record_id=parent_record_id,
-        )
-        return [_extract_result(n) for n in response.data]
+        return [
+            _extract_result(n)
+            for n in _paginate_raw_notes(client, parent_object, parent_record_id)
+        ]
 
 
 def add_note(input: NoteInput) -> NoteResult:
@@ -167,11 +223,7 @@ def find_note_by_title(
     for non-meeting notes).
     """
     with get_client() as client:
-        response = client.notes.get_v2_notes(
-            parent_object=parent_object,
-            parent_record_id=parent_record_id,
-        )
-        for note in response.data:
+        for note in _paginate_raw_notes(client, parent_object, parent_record_id):
             if getattr(note, "title", None) != title:
                 continue
             if (

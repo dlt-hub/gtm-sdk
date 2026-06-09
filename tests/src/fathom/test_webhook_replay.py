@@ -61,8 +61,22 @@ def test_replay_does_not_create_duplicate_notes(monkeypatch) -> None:
     def fake_find_or_create_meeting(meeting_input):  # noqa: ANN001, ANN202
         return _meeting_envelope("meet-rec-1")
 
-    def fake_list_notes(*, parent_object, parent_record_id):  # noqa: ANN001, ANN202
-        return list(stored_notes.get(parent_record_id, []))
+    def fake_find_note(  # noqa: ANN202
+        *,
+        parent_object,  # noqa: ANN001
+        parent_record_id,  # noqa: ANN001
+        title,  # noqa: ANN001
+        meeting_id=None,  # noqa: ANN001
+    ):
+        # Mirror libs.attio.notes.find_note_by_title: first stored note whose
+        # title matches, scoped to meeting_id when given.
+        for note in stored_notes.get(parent_record_id, []):
+            if note.title != title:
+                continue
+            if meeting_id is not None and note.meeting_id != meeting_id:
+                continue
+            return note.note_id
+        return None
 
     def fake_add_note(note_input):  # noqa: ANN001, ANN202
         note_id = next(next_note_id)
@@ -80,8 +94,8 @@ def test_replay_does_not_create_duplicate_notes(monkeypatch) -> None:
         fake_find_or_create_meeting,
     )
     monkeypatch.setattr(
-        "src.attio.export.libs_list_notes_for_parent",
-        fake_list_notes,
+        "src.attio.export.libs_find_note_by_title",
+        fake_find_note,
     )
     monkeypatch.setattr("src.attio.export.libs_add_note", fake_add_note)
 

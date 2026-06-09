@@ -352,10 +352,10 @@ def test_handle_upsert_note_creates_when_title_missing(monkeypatch) -> None:
     table = LookupTable()
     table.record(person_op, "person-rec-1")
 
-    list_notes_mock = MagicMock(return_value=[])
+    find_note_mock = MagicMock(return_value=None)
     monkeypatch.setattr(
-        "src.attio.export.libs_list_notes_for_parent",
-        list_notes_mock,
+        "src.attio.export.libs_find_note_by_title",
+        find_note_mock,
     )
 
     fake_result = MagicMock()
@@ -375,23 +375,17 @@ def test_handle_upsert_note_creates_when_title_missing(monkeypatch) -> None:
     assert envelope.success is True
     assert envelope.record_id == "note-1"
     assert envelope.action == "created"
-    list_notes_mock.assert_called_once_with(
+    find_note_mock.assert_called_once_with(
         parent_object="people",
         parent_record_id="person-rec-1",
+        title="hi",
+        meeting_id=None,
     )
     call_input = add_note_mock.call_args.args[0]
     assert call_input.parent_object == "people"
     assert call_input.parent_record_id == "person-rec-1"
     assert call_input.title == "hi"
     assert call_input.content == "body"
-
-
-def _existing_note(*, note_id: str, title: str, meeting_id: str | None) -> MagicMock:
-    note = MagicMock()
-    note.note_id = note_id
-    note.title = title
-    note.meeting_id = meeting_id
-    return note
 
 
 def test_handle_upsert_note_skips_when_title_and_meeting_match(monkeypatch) -> None:
@@ -404,13 +398,9 @@ def test_handle_upsert_note_skips_when_title_and_meeting_match(monkeypatch) -> N
     table.record(person_op, "person-rec-1")
     table.record(_meeting("fathom-call-1"), "meet-rec-1")
 
-    existing = _existing_note(
-        note_id="note-existing",
-        title="Fathom summary",
-        meeting_id="meet-rec-1",
-    )
-    list_notes_mock = MagicMock(return_value=[existing])
-    monkeypatch.setattr("src.attio.export.libs_list_notes_for_parent", list_notes_mock)
+    # find_note_by_title owns the (title, meeting_id) match; here it finds one.
+    find_note_mock = MagicMock(return_value="note-existing")
+    monkeypatch.setattr("src.attio.export.libs_find_note_by_title", find_note_mock)
 
     add_note_mock = MagicMock()
     monkeypatch.setattr("src.attio.export.libs_add_note", add_note_mock)
@@ -428,6 +418,12 @@ def test_handle_upsert_note_skips_when_title_and_meeting_match(monkeypatch) -> N
     assert envelope.success is True
     assert envelope.action == "noop"
     assert envelope.record_id == "note-existing"
+    find_note_mock.assert_called_once_with(
+        parent_object="people",
+        parent_record_id="person-rec-1",
+        title="Fathom summary",
+        meeting_id="meet-rec-1",
+    )
     add_note_mock.assert_not_called()
 
 
@@ -435,7 +431,9 @@ def test_handle_upsert_note_creates_when_same_title_different_meeting(
     monkeypatch,
 ) -> None:
     """A shared Person parent accumulates notes across meetings: a same-titled
-    note from a *different* meeting must NOT dedup away the new one (ai-gez)."""
+    note from a *different* meeting must NOT dedup away the new one (ai-gez).
+    find_note_by_title scopes the match to this meeting, so it returns None and
+    a fresh note is created."""
     from src.attio.export import OP_HANDLERS
 
     _handle_upsert_note = OP_HANDLERS[UpsertNote]
@@ -447,15 +445,10 @@ def test_handle_upsert_note_creates_when_same_title_different_meeting(
     )
     table.record(_meeting("fathom-call-2"), "meet-rec-2")
 
-    # Existing note has the same title but belongs to a different meeting.
-    existing = _existing_note(
-        note_id="note-old",
-        title="Action items",
-        meeting_id="meet-rec-OTHER",
-    )
+    # No note for THIS meeting (the only same-title note belongs to another).
     monkeypatch.setattr(
-        "src.attio.export.libs_list_notes_for_parent",
-        MagicMock(return_value=[existing]),
+        "src.attio.export.libs_find_note_by_title",
+        MagicMock(return_value=None),
     )
     fake_result = MagicMock()
     fake_result.note_id = "note-new"
@@ -493,8 +486,8 @@ def test_handle_upsert_note_maps_ref_kind_to_parent_object(monkeypatch) -> None:
     table.record(meeting_op, "meet-rec-7")
 
     monkeypatch.setattr(
-        "src.attio.export.libs_list_notes_for_parent",
-        MagicMock(return_value=[]),
+        "src.attio.export.libs_find_note_by_title",
+        MagicMock(return_value=None),
     )
 
     fake_result = MagicMock()
@@ -548,8 +541,8 @@ def test_handle_upsert_note_resolves_parent_via_query_when_table_misses(
     resolve_mock = MagicMock(return_value="person-autocreated")
     monkeypatch.setattr("src.attio.export.libs_resolve_record_id_for_ref", resolve_mock)
     monkeypatch.setattr(
-        "src.attio.export.libs_list_notes_for_parent",
-        MagicMock(return_value=[]),
+        "src.attio.export.libs_find_note_by_title",
+        MagicMock(return_value=None),
     )
     fake_result = MagicMock()
     fake_result.note_id = "note-z"
@@ -590,8 +583,8 @@ def test_handle_upsert_note_unresolved_meeting_returns_failed_envelope(
         "person-rec-1",
     )
 
-    list_notes_mock = MagicMock()
-    monkeypatch.setattr("src.attio.export.libs_list_notes_for_parent", list_notes_mock)
+    find_note_mock = MagicMock()
+    monkeypatch.setattr("src.attio.export.libs_find_note_by_title", find_note_mock)
     add_note_mock = MagicMock()
     monkeypatch.setattr("src.attio.export.libs_add_note", add_note_mock)
 
@@ -608,7 +601,7 @@ def test_handle_upsert_note_unresolved_meeting_returns_failed_envelope(
     assert envelope.success is False
     assert envelope.errors[0].code == "unresolved_ref"
     assert "meeting" in envelope.errors[0].message
-    list_notes_mock.assert_not_called()
+    find_note_mock.assert_not_called()
     add_note_mock.assert_not_called()
 
 
@@ -617,10 +610,10 @@ def test_handle_upsert_note_unresolved_ref_returns_failed_envelope(monkeypatch) 
 
     _handle_upsert_note = OP_HANDLERS[UpsertNote]
 
-    list_notes_mock = MagicMock()
+    find_note_mock = MagicMock()
     monkeypatch.setattr(
-        "src.attio.export.libs_list_notes_for_parent",
-        list_notes_mock,
+        "src.attio.export.libs_find_note_by_title",
+        find_note_mock,
     )
     add_note_mock = MagicMock()
     monkeypatch.setattr("src.attio.export.libs_add_note", add_note_mock)
@@ -647,7 +640,7 @@ def test_handle_upsert_note_unresolved_ref_returns_failed_envelope(monkeypatch) 
     assert err.code == "unresolved_ref"
     assert err.error_type == "UnresolvedRefError"
     assert err.fatal is True
-    list_notes_mock.assert_not_called()
+    find_note_mock.assert_not_called()
     add_note_mock.assert_not_called()
 
 

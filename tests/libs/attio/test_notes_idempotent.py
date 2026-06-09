@@ -1,10 +1,123 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from libs.attio.contracts import ReliabilityEnvelope
+from libs.attio.errors import AttioError
 from libs.attio.models import NoteInput
+
+
+def _raw_note(
+    note_id: str,
+    *,
+    title: str = "t",
+    meeting_id: str | None = None,
+) -> SimpleNamespace:
+    """A NoteResult-valid stand-in for a raw SDK note (real str attrs)."""
+    return SimpleNamespace(
+        id=SimpleNamespace(note_id=note_id),
+        title=title,
+        parent_object="people",
+        parent_record_id="pid",
+        content_plaintext="",
+        created_at="2026-01-01T00:00:00Z",
+        meeting_id=meeting_id,
+    )
+
+
+def test_list_notes_for_parent_paginates_until_short_page() -> None:
+    # ai-crf: the LIST endpoint returns one short page with no sort control, so
+    # the dedup must drain every page or it misses notes past page 1.
+    page1 = MagicMock(
+        data=[_raw_note(f"n{i}") for i in range(50)],
+    )  # full page → keep going
+    page2 = MagicMock(data=[_raw_note("n50"), _raw_note("n51")])  # short page → stop
+    fake_client = MagicMock()
+    fake_client.notes.get_v2_notes.side_effect = [page1, page2]
+
+    with patch("libs.attio.notes.get_client") as mock_ctx:
+        mock_ctx.return_value.__enter__.return_value = fake_client
+        from libs.attio.notes import list_notes_for_parent
+
+        out = list_notes_for_parent("people", "pid")
+
+    assert len(out) == 52
+    assert fake_client.notes.get_v2_notes.call_count == 2
+    _, kwargs = fake_client.notes.get_v2_notes.call_args_list[1]
+    assert kwargs["offset"] == 50
+    assert kwargs["limit"] == 50
+
+
+def test_find_note_by_title_matches_note_past_first_page() -> None:
+    # ai-crf regression: a freshly-written note can sort past page 1 on a busy
+    # parent (e.g. a Fireflies notetaker with 40+ notes); without pagination the
+    # dedup misses it and a re-run recreates a duplicate.
+    page1 = MagicMock(
+        data=[_raw_note(f"n{i}", title="Other", meeting_id="m-x") for i in range(50)],
+    )
+    target = _raw_note("note-target", title="Action items", meeting_id="m-THIS")
+    page2 = MagicMock(data=[target])
+    fake_client = MagicMock()
+    fake_client.notes.get_v2_notes.side_effect = [page1, page2]
+
+    with patch("libs.attio.notes.get_client") as mock_ctx:
+        mock_ctx.return_value.__enter__.return_value = fake_client
+        from libs.attio.notes import find_note_by_title
+
+        out = find_note_by_title(
+            parent_object="people",
+            parent_record_id="pid",
+            title="Action items",
+            meeting_id="m-THIS",
+        )
+
+    assert out == "note-target"
+    assert fake_client.notes.get_v2_notes.call_count == 2
+
+
+def test_list_notes_for_parent_fails_closed_at_page_cap(monkeypatch) -> None:
+    # ai-8tv: if every page is full (server ignores offset / pathological parent),
+    # the dedup must raise rather than return a truncated list — silently
+    # truncating would reopen the duplicate-note hole this fix closes.
+    monkeypatch.setattr("libs.attio.notes._NOTES_MAX_PAGES", 2)
+    full_page = MagicMock(data=[_raw_note(f"n{i}") for i in range(50)])
+    fake_client = MagicMock()
+    fake_client.notes.get_v2_notes.return_value = full_page  # never a short page
+
+    with patch("libs.attio.notes.get_client") as mock_ctx:
+        mock_ctx.return_value.__enter__.return_value = fake_client
+        from libs.attio.notes import list_notes_for_parent
+
+        with pytest.raises(AttioError, match="page cap"):
+            list_notes_for_parent("people", "pid")
+
+    # Cap is 2 full pages, plus one confirming probe that is still full → raise.
+    assert fake_client.notes.get_v2_notes.call_count == 3
+
+
+def test_list_notes_for_parent_drains_exact_multiple_of_page_size(monkeypatch) -> None:
+    # ai-8tv off-by-one: a parent whose note count is an exact multiple of the page
+    # size (here cap=2 → 100 notes, 2 full pages) must be drained by the confirming
+    # empty page, NOT false-fail at the boundary.
+    monkeypatch.setattr("libs.attio.notes._NOTES_MAX_PAGES", 2)
+    full1 = MagicMock(data=[_raw_note(f"a{i}") for i in range(50)])
+    full2 = MagicMock(data=[_raw_note(f"b{i}") for i in range(50)])
+    empty = MagicMock(data=[])  # confirming probe → drained, no raise
+    fake_client = MagicMock()
+    fake_client.notes.get_v2_notes.side_effect = [full1, full2, empty]
+
+    with patch("libs.attio.notes.get_client") as mock_ctx:
+        mock_ctx.return_value.__enter__.return_value = fake_client
+        from libs.attio.notes import list_notes_for_parent
+
+        out = list_notes_for_parent("people", "pid")
+
+    assert len(out) == 100
+    assert fake_client.notes.get_v2_notes.call_count == 3
 
 
 def test_find_note_by_title_returns_none_when_no_match() -> None:
